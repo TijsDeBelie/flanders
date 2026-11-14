@@ -133,6 +133,8 @@ pub struct World {
     share_until: u64,            // winter: everyone huddles together, firewood lasts twice as long
     quarantine_until: u64,       // while quarantined, plague kills fewer and heals faster but the sick do no work
     caravans: Vec<Caravan>,   // goods on the road to another village
+    awaiting: Vec<[i32; 3]>,  // [resource, amount, to] delivered caravans whose payment has not been settled yet (part of the state)
+    delivered: Vec<[i32; 3]>, // the same, but only as a notice for the player's own client to pass on (drained by take_delivered, not part of the state)
     treaties: Vec<Treaty>,    // agreements with other villages
     warm: bool,    // false while winter fires are out for lack of wood
     eff: u32,
@@ -198,7 +200,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -843,6 +845,12 @@ impl World {
         let mut lost = vec![];
         for (i, c) in self.caravans.iter().enumerate() { if c.eta > self.tick && self.tick % 10 == 0 && self.rng.range(300 + 120 * c.escort) == 0 { lost.push(i); } }
         for &i in lost.iter().rev() { let c = self.caravans.remove(i); self.push_event(EV_ROBBED, c.amount, c.res as i32); }
+        // arrivals: the escort comes home, and the goods wait for the other village to take them
+        let now = self.tick; let mut rest = vec![];
+        for c in std::mem::take(&mut self.caravans) {
+            if c.eta <= now { self.army[0] += c.escort; self.awaiting.push([c.res as i32, c.amount, c.to]); self.delivered.push([c.res as i32, c.amount, c.to]); } else { rest.push(c); }
+        }
+        self.caravans = rest;
     }
 
     /// Ports sell the most plentiful stock for gold every half minute, and buy grain when the village runs short.
@@ -1010,12 +1018,20 @@ impl World {
     }
     /// Goods on the road: [resource, amount, to, ticks left, escort] each.
     pub fn caravans_flat(&self) -> Vec<i32> { self.caravans.iter().flat_map(|c| [c.res as i32, c.amount, c.to, (c.eta.saturating_sub(self.tick)) as i32, c.escort as i32]).collect() }
-    /// Caravans that reached their destination since the last call, removed from the road: [resource, amount, to] each. The sender tells the receiving village (see `receive_goods`).
-    pub fn take_delivered(&mut self) -> Vec<i32> {
-        let mut out = vec![]; let now = self.tick;
-        let mut rest = vec![];
-        for c in std::mem::take(&mut self.caravans) { if c.eta <= now { out.extend_from_slice(&[c.res as i32, c.amount, c.to]); self.army[0] += c.escort; } else { rest.push(c); } }
-        self.caravans = rest; out
+    /// Caravans that reached their destination since the last call: [resource, amount, to] each. Only a notice: the village's own client passes it on so the other village can take
+    /// the goods (see `receive_goods`) and pay (see `settle`). The caravan itself is moved on in `step`, so every peer's copy of this village agrees.
+    pub fn take_delivered(&mut self) -> Vec<i32> { std::mem::take(&mut self.delivered).into_iter().flatten().collect() }
+    /// Has a caravan of exactly this arrived for village `to` and not been settled? (A village checks this on its neighbour's copy before it accepts a delivery, so nobody can force goods on it.)
+    pub fn is_awaiting(&self, res: u8, amount: i32, to: i32) -> bool { self.awaiting.iter().any(|a| a[0] == res as i32 && a[1] == amount && a[2] == to) }
+    /// The other village took the goods of one of our caravans: settle the account, paying coin at the usual price (10% more under a trade pact). It only pays for a caravan that really arrived
+    /// and has not been paid yet, so a forged message cannot print money. Returns the coins received.
+    pub fn settle(&mut self, res: u8, amount: i32, from: i32) -> i32 {
+        let Some(i) = self.awaiting.iter().position(|a| a[0] == res as i32 && a[1] == amount && a[2] == from) else { return 0 };
+        self.awaiting.remove(i);
+        let pact = self.has_treaty(from, TREATY_TRADE);
+        let gold = amount * PRICE[res as usize] * if pact { 110 } else { 100 } / 100;
+        let cap = self.storage_cap(); let before = self.stock[GD as usize];
+        self.stock[GD as usize] = Self::add_capped(before, gold, cap); self.stock[GD as usize] - before
     }
     /// Goods arrive from another village's caravan: they go into the stores (up to what fits), and the sender is owed their worth, which we pay in coin at our own price when we can. Returns the coins paid.
     pub fn receive_goods(&mut self, res: u8, amount: i32) -> i32 {
@@ -1178,7 +1194,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for a in &self.awaiting { mix(a[1] as u64); mix(a[2] as i64 as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -2006,6 +2022,10 @@ mod trade_tests {
         let paid = buyer.receive_goods(d[0] as u8, d[1]);
         assert_eq!(buyer.stock[IR as usize], iron_b + 40); assert_eq!(buyer.stock[GD as usize], gold_b - paid); assert!(paid > 0);
         let _ = gold_s;
+        // the sender is paid once, and only for goods that really arrived
+        assert!(sender.is_awaiting(IR, 40, 7) && !sender.is_awaiting(IR, 40, 8));
+        let sold = sender.settle(IR, 40, 7); assert!(sold > 0, "paid for the delivery");
+        assert_eq!(sender.settle(IR, 40, 7), 0, "never twice"); assert_eq!(sender.settle(IR, 41, 7), 0, "nor for goods that were never sent"); assert_eq!(sender.settle(IR, 40, 8), 0, "nor to the wrong village");
         // limits
         assert_eq!(sender.caravan_send(IR, 9999, 7, 10.0, 0), -1); assert_eq!(sender.caravan_send(IR, 40, 7, 10.0, 99), -3);
         sender.stock[IR as usize] = 5; assert_eq!(sender.caravan_send(IR, 40, 7, 10.0, 0), -2);
@@ -2016,10 +2036,10 @@ mod trade_tests {
         let mut w = rich(); w.army[0] = 10;
         assert_eq!(w.caravan_send(W, 20, 3, 60.0, 4), 0); assert_eq!(w.army[0], 6);
         for _ in 0..300 { w.step(); w.stock[GR as usize] = 300; w.stock[W as usize] = 300; }
-        let _ = w.take_delivered(); assert_eq!(w.army[0], 10, "the escort returned");
+        assert_eq!(w.army[0], 10, "the escort returned");
         // many unescorted caravans: some are lost on the road
         let mut lost = 0;
-        for k in 0..40 { let mut w = rich(); w.rng = Rng(k as u64 * 7919 + 1); w.caravan_send(W, 20, 3, 400.0, 0); for _ in 0..400 { w.step(); w.stock[GR as usize] = 300; } if w.take_delivered().is_empty() { lost += 1; } }
+        for k in 0..40 { let mut w = rich(); w.rng = Rng(k as u64 * 7919 + 1); w.caravan_send(W, 20, 3, 400.0, 0); for _ in 0..400 { w.step(); w.stock[GR as usize] = 300; } if w.awaiting.is_empty() { lost += 1; } }
         assert!(lost > 0 && lost < 40, "{lost} of 40 caravans were robbed");
     }
 

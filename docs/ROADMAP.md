@@ -57,6 +57,11 @@ What is missing is mostly *reasons to care between fights*: people are a number,
 
 ## Status of this plan
 
-Done, each in its own pull request on top of the last (see the PR list): 1 families, ages, seasons and firewood; 2 market prices, caravans and treaties (core only); 3 events with choices; 4 morale and routing (siege towers, rams, sapping and heroes are not done); 5 neutral places and fog of war (no button for visiting yet; scouts and toll posts not done); 7 the batch placement command and an economy regression test.
+Done, each in its own pull request on top of the last: 1 families, ages, seasons and firewood; 2 market prices, caravans and treaties; 3 events with choices; 4 morale and routing; 5 neutral places and fog of war; 7 batch placement and an economy regression test. The follow-up pull request adds what those left open: a trade form (caravans, trade pact, peace), delivery and payment of caravans between players over the network (checked against the sender's copy, so nobody can push goods or print money), the "enter the place here" action for armies, and the wall pen on one batch command.
 
-Not done: 6 (free-form roads and districts, second tier of building options, village styles), terrain level of detail (needs checking in a real browser, which was off the table for these PRs), and the user interface for caravans and treaties.
+Still not done:
+- 4: siege towers, rams, sapping, boiling oil, named lords and heroes (each needs a new unit or building and its drawing).
+- 5: dedicated scouts and toll posts (a toll post is a new building).
+- 6: free-form roads and districts, a second tier of building options, village styles.
+- 7: terrain level of detail, the demo village on the batch command, and an agent scenario test that plays through the MCP server.
+- Graphify's advisory remarks on `main.ts` (`commit`, `updateHud`, `afterLocalChange` are hubs with many callers): the choice card and the population tooltip moved into their own modules, but main.ts is still one large file.

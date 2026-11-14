@@ -7,7 +7,7 @@ import '@fontsource/alegreya-sans/700.css';
 import './ui/style.css';
 import * as THREE from 'three';
 import init, { World, upgrade_cost_flat, village_sites, tunnels_flat } from './wasm/game_core.js';
-import { CHOICES, CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING } from './data';
+import { CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING } from './data';
 import { PenPreview } from './render/pen';
 import { WorldShips } from './render/ships';
 import { buildModelVillage, type ModelApi } from './modelvillage';
@@ -27,6 +27,8 @@ import { Sound } from './audio';
 import { Minimap, type MapVillage } from './ui/minimap';
 import { Tunnels } from './render/tunnels';
 import { startAgentBridge } from './agent';
+import { showChoice } from './ui/choicebox';
+import { showPopulationInfo } from './ui/hudinfo';
 import { Identity, Room, tagOf, type Cmd, type Signed, type Hello } from './net/p2p';
 import { Village, type Shared } from './village';
 import { PathLine, STATE_TEXT } from './render/field';
@@ -53,6 +55,7 @@ const ui: UI = new UI({
   minimapClick: (x, z) => rig?.focus(x, z),
   train: (k, n) => doTrain(k, n),
   attack: (key, u) => doAttack(key, u),
+  trade: (key, action, res, amount, escort) => doTrade(key, action, res, amount, escort),
   focusPeer: key => { const r = rivals.get(key); if (r) rig.focus(r.village.ox, r.village.oz, 80); },
   cheat: (a, x, y) => doCheat(a, x, y),
   copyLink: () => navigator.clipboard?.writeText(`${location.origin}${location.pathname}?world=${encodeURIComponent(worldName)}`),
@@ -129,6 +132,9 @@ function applyCmd(w: World, c: Cmd) {
     case 'flatten': w.flatten(c.x ?? 60); break;
     case 'batch': w.place_batch(Int32Array.from(c.units ?? [])); break;   // [kind, dx, dy, rot] per piece, rebuilt once
     case 'visit': w.visit_neutral(c.idx!); break;
+    case 'goods': break;   // a notice that a caravan arrived: the receiver acts on it (see onCmd), nothing to replay
+    case 'accept': w.receive_goods(c.kind ?? 0, c.x ?? 0); break;
+    case 'settle': w.settle(c.kind ?? 0, c.x ?? 0, c.idx ?? 0); break;
     case 'choose': w.choose(c.kind ?? 0); break;
     case 'treaty': if ((c.y ?? 1) === 0) w.treaty_end(c.idx!, c.kind ?? 0); else w.treaty_set(c.idx!, c.kind ?? 0, c.x ?? 10); break;
     case 'caravan': w.caravan_send(c.kind ?? 0, c.x ?? 0, c.idx ?? 0, c.y ?? 0, c.ax ?? 0); break;
@@ -226,6 +232,7 @@ function connect() {
         commit({ op: 'return', units: c.units, loot: new Array(RES.length).fill(0) }); ui.toast('Your army was turned back — the village was already under attack.', 'info');
       }
       if (c.op === 'raid') ui.toast(`${r.name}'s village is under attack!`, 'info');
+      if (c.to === identity.pub) onTrade(r, c);
     },
     onHash: (peerId, tick, hash) => {
       const r = rivals.get(byPeer.get(peerId) ?? ''); if (!r) return;
@@ -330,6 +337,58 @@ function doCheat(action: number, a: number, b: number) {
   if (action === 8) { selectBuilding(null); afterLocalChange(); ui.toast('The terrain was reset.', 'good'); return; }
   if (action === 7) ui.toast('All fires are out.', 'good');
   lv.afterTick(); updateSelection(); updateHud();
+}
+
+// ---------- trade and treaties ----------
+const doDecide = (option: number) => {
+  const code = lv.world.choose(option);
+  if (code === 0) { commit({ op: 'choose', kind: option }); sound.click(); afterLocalChange(); } else ui.toast(code === -6 ? 'You cannot afford that.' : 'Cannot do that.', 'bad');
+};
+
+/** Another village is dealing with us: take the goods they sent, settle a caravan we sent, or answer a treaty (agreeing to a pact or peace costs us nothing). */
+function onTrade(r: Rival, c: Cmd) {
+  const w = lv.world, their = tagOf(r.key);
+  if (c.op === 'goods') {   // their caravan reached us (we check on their copy of their village that it really did, so nobody can push goods on us)
+    if (!r.village.world.is_awaiting(c.kind ?? 0, c.x ?? 0, myTag())) return;
+    const paid = w.receive_goods(c.kind ?? 0, c.x ?? 0);
+    commit({ op: 'accept', kind: c.kind, x: c.x, to: r.key });
+    ui.toast(`${r.name}'s caravan arrived: ${c.x} ${RES[c.kind ?? 0]?.name.toLowerCase() ?? 'goods'}${paid ? `, we paid ${paid} gold` : ''}.`, 'good'); afterLocalChange();
+  } else if (c.op === 'accept') {   // they took what our caravan carried
+    const got = w.settle(c.kind ?? 0, c.x ?? 0, their);
+    if (got > 0) { commit({ op: 'settle', kind: c.kind, x: c.x, idx: their }); ui.toast(`${r.name} paid ${got} gold for the goods.`, 'good'); updateHud(); }
+  } else if (c.op === 'treaty' && (c.y ?? 1) !== 0) {   // an offer: we agree, and tell them with our own signed copy (without `to`, so it is not answered again)
+    if (w.treaty_set(their, c.kind ?? 0, c.x ?? 10)) { commit({ op: 'treaty', idx: their, kind: c.kind, x: c.x }); ui.toast(`${r.name} offers ${c.kind === 1 ? 'peace' : 'a trade pact'} for ${c.x} days. Agreed.`, 'good'); }
+  }
+}
+
+/** What the trade form in the peers pane asks for. */
+function doTrade(key: string, action: string, res: number, amount: number, escort: number) {
+  const r = rivals.get(key); if (!r || !r.online) { ui.toast('That village is not online right now.', 'bad'); return; }
+  const w = lv.world, their = tagOf(key);
+  if (action === 'caravan') {
+    const dist = Math.hypot(r.village.ox - lv.ox, r.village.oz - lv.oz), code = w.caravan_send(res, amount, their, dist, escort);
+    if (code !== 0) { ui.toast(code === -2 ? 'You do not have that much to send.' : code === -3 ? 'Not enough spearmen for the escort.' : 'Cannot send that.', 'bad'); return; }
+    commit({ op: 'caravan', kind: res, x: amount, idx: their, y: dist, ax: escort }); sound.click(); ui.toast(`A caravan of ${amount} ${RES[res].name.toLowerCase()} sets out for ${r.name}.`, 'good'); updateHud();
+  } else {
+    const kind = action === 'peace' ? 1 : 0, days = 30;
+    if (w.treaty_set(their, kind, days)) { commit({ op: 'treaty', idx: their, kind, x: days, to: key }); ui.toast(`You offer ${r.name} ${kind ? 'peace' : 'a trade pact'} for ${days} days.`, 'info'); }
+  }
+}
+
+/** Caravans that arrived: tell the village they were sent to, so it can take them and pay. */
+function pollTrade() {
+  const d = lv.world.take_delivered();
+  for (let i = 0; i + 2 < d.length; i += 3) { for (const [key] of rivals) if (tagOf(key) === d[i + 2]) { commit({ op: 'goods', kind: d[i], x: d[i + 1], to: key }); break; } }
+}
+
+/** An army that has stopped beside an abbey, a ruin or a bandit camp goes in. */
+function visitPlace(id: number) {
+  const code = lv.world.visit_neutral(id);
+  if (code === -2) { ui.toast('There is no place here to enter. March the army right up to an abbey, a ruin or a camp.', 'info'); return; }
+  if (code === -3) { ui.toast('This place has already been used.', 'info'); return; }
+  if (code < 0) return;
+  commit({ op: 'visit', idx: id }); afterLocalChange(); updateDets();
+  ui.toast(code === 0 ? 'The monks heal your sick.' : code === 1 ? 'The ruin gives up its hoard.' : code === 2 ? 'The bandit camp is cleared and its coin is yours.' : 'The camp was too strong: half your army fell. Try again with more men.', code >= 100 ? 'bad' : 'good');
 }
 
 // ---------- war between players ----------
@@ -599,29 +658,13 @@ function refreshTerrain(w: World) {
 }
 function refreshAll() { refreshTerrain(lv.world); for (const r of rivals.values()) refreshTerrain(r.village.world); lv.syncFull(); for (const r of rivals.values()) r.village.syncFull(); }
 
-/** A decision waiting for the player: a small card with one button per option. */
-let choiceKey = '';
-function showChoice(w: World) {
-  const c = w.choice_flat(), key = c.length ? `${c[0]}:${w.tick()}` : '';
-  let box = document.getElementById('choicebox');
-  if (!c.length) { if (box) box.remove(); choiceKey = ''; return; }
-  if (key === choiceKey && box) return;
-  choiceKey = key; box?.remove();
-  const def = CHOICES[c[0]]; if (!def) return;
-  box = document.createElement('div'); box.id = 'choicebox';
-  box.style.cssText = 'position:fixed;left:50%;top:90px;transform:translateX(-50%);z-index:55;max-width:460px;background:#f3e8cc;color:#2a1d10;border:2px solid #7a5a22;border-radius:6px;padding:14px 16px;font:15px Georgia,serif;box-shadow:0 8px 30px #0008';
-  box.innerHTML = `<b style="font-size:18px">${def.title}</b><p>${def.story} <i>(${c[2]} days to decide)</i></p>` + def.options.map((o, i) => `<button class="pbtn" data-opt="${i}" style="display:block;width:100%;margin:5px 0;text-align:left">${o}</button>`).join('');
-  box.onclick = e => { const b = (e.target as HTMLElement).closest<HTMLElement>('[data-opt]'); if (!b) return; const opt = Number(b.dataset.opt), code = lv.world.choose(opt); if (code === 0) { commit({ op: 'choose', kind: opt }); sound.click(); afterLocalChange(); } else ui.toast(code === -6 ? 'You cannot afford that.' : 'Cannot do that.', 'bad'); };
-  document.body.appendChild(box);
-}
-
 function afterLocalChange() { refreshTerrain(lv.world); lv.syncFull(); lv.afterTick(); if (forestDirtyFlag) rebuildForest(); updateSelection(); updateHud(); }
 
 function updateHud() {
   const w = lv.world;
   let barracks = -1; const f = w.buildings_flat(); for (let i = 0; i < f.length; i += 10) if (f[i] === 19) barracks = Math.max(barracks, f[i + 1]);
-  { const d = w.demographics(), el = document.getElementById('v-pop'); if (el) el.title = `Villagers / housing. ${d[0]} children, ${d[1]} adults (they do the work), ${d[2]} elders, about ${d[3]} couples. Year ${w.year()}. Grain harvest now ${w.grain_percent()}% of usual${w.warmth() ? '' : '. It is freezing: no firewood!'}`; }
-  showChoice(w);
+  showPopulationInfo(w);
+  showChoice(w, doDecide);
   ui.update({
     tick: Number(w.tick()), stocks: Array.from(w.stocks()), rates, pop: w.population(), cap: w.capacity(), sick: w.sick(),
     joy: w.happiness(), eff: w.efficiency(), jobs: w.jobs(), radius: w.build_radius(), buildings: w.building_count(), storage: w.storage(),
@@ -651,7 +694,7 @@ function stepLocal() {
   for (let i = 0; i < ev.length; i += 4) { const e = EVENT_TEXT(ev[i], ev[i + 1], ev[i + 2]); ui.toast(e.text, e.tone); ui.log(e.text, e.tone, ev[i + 3]); if (e.tone === 'bad') sound.alert(); else if (e.tone === 'good') sound.coin(); }
   const t = Number(w.tick());
   if (t % 4 === 0) updateGoals();
-  checkArrivals(); updateDets(); if (selectedDet !== null) showRoute();
+  pollTrade(); checkArrivals(); updateDets(); if (selectedDet !== null) showRoute();
   room?.broadcastHash(t, w.state_hash().toString());
   if (t % 3 === 0) deposits.sync(w.deposits_flat());
   if (t % 20 === 0) atmo.setTime(0.12 + 0.76 * ((t / 1200) % 1)); // morning to evening, never dark
@@ -735,10 +778,10 @@ function penPreviewUpdate(kind: number, a: { x: number; z: number }, b: { x: num
 
 function penCommit(kind: number, a: { x: number; z: number }, b: { x: number; z: number }, free: boolean) {
   const { pieces: all, rot } = penPieces(kind, a, b, free), pieces = all.slice(0, 400); let placed = 0, blocked = 0, broke = false;   // one stroke lays at most 400 pieces
-  for (const p of pieces) {
-    const code = lv.world.place(kind, p.dx, p.dy, rot);
-    if (code >= 0) { commit({ op: 'place', kind, x: p.dx, y: p.dy, rot }); placed++; } else if (code === -6) { broke = true; break; } else blocked++;
-  }
+  // the whole stroke is one batch: the paths are worked out once at the end, and it is sent as one signed command
+  const items = pieces.flatMap(p => [kind, p.dx, p.dy, rot]), codes = lv.world.place_batch(Int32Array.from(items));
+  for (const code of codes) { if (code >= 0) placed++; else if (code === -6) broke = true; else blocked++; }
+  if (placed) commit({ op: 'batch', units: items });
   if (placed) { afterLocalChange(); sound.place(2); const last = pieces[pieces.length - 1]; placedFx(kind, last.x, last.z); updateHud(); }
   ui.toast(placed ? `${placed} × ${defs[kind].name.toLowerCase()} built${broke ? ' — you ran out of materials' : blocked ? ` (${blocked} blocked)` : ''}.` : broke ? 'Not enough resources.' : 'Nothing could be built there.', placed ? 'good' : 'bad');
 }
@@ -870,7 +913,7 @@ function openContext(e: PointerEvent) {
   let title = 'The land';
   if (det !== null) {
     selectDet(det); title = `Army ${det}`;
-    items.push({ label: 'Halt', sub: 'G', run: () => detAction('halt', det) }, { label: 'Send home', sub: 'B', run: () => detAction('recall', det) }, '-', { label: 'Split in two', run: () => detAction('split', det) }, { label: 'Merge with nearest', run: () => detAction('merge', det) });
+    items.push({ label: 'Halt', sub: 'G', run: () => detAction('halt', det) }, { label: 'Send home', sub: 'B', run: () => detAction('recall', det) }, '-', { label: 'Split in two', run: () => detAction('split', det) }, { label: 'Merge with nearest', run: () => detAction('merge', det) }, '-', { label: 'Enter the place here', run: () => visitPlace(det) });
   } else if (idx !== null) {
     selectBuilding(idx);
     const f = lv.world.buildings_flat(), o = idx * 10, kind = f[o], tier = f[o + 1], hp = lv.world.building_health(), hurt = hp[idx * 3 + 1] > 0 && hp[idx * 3] / hp[idx * 3 + 1] < 0.995 && hp[idx * 3 + 2] <= 0;

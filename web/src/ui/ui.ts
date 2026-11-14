@@ -20,6 +20,7 @@ export interface Handlers {
   minimapClick(x: number, z: number): void;
   train(kind: number, n: number): void;
   attack(peerKey: string, units: number[]): void;
+  trade(peerKey: string, action: string, res: number, amount: number, escort: number): void;
   focusPeer(key: string): void;
   copyLink(): void;
   cheat(action: number, a: number, b: number): void;
@@ -483,8 +484,13 @@ export class UI {
       form.innerHTML = rows.length
         ? `<select id="atk-target">${rows.map(r => `<option value="${esc(r.key)}">${esc(r.name)}</option>`).join('')}</select>
            <div class="atk-row">${units.slice(0, 5).map(u => `<label title="${u.name}">${UNIT_ICON[u.id]}<input type="number" min="0" value="0" id="atk-${u.id}"></label>`).join('')}</div>
-           <button class="pbtn danger" id="atk-go">⚔ March!</button>`
+           <button class="pbtn danger" id="atk-go">⚔ March!</button>
+           <h4>Trade</h4>
+           <div class="atk-row"><select id="trd-res">${RES.map((r, i) => `<option value="${i}">${r.icon} ${r.name}</option>`).join('')}</select><label title="Amount">#<input type="number" min="1" max="500" value="50" id="trd-amt"></label><label title="Spearmen as escort">🛡<input type="number" min="0" value="0" id="trd-esc"></label></div>
+           <div class="btnrow"><button class="pbtn" id="trd-send">🐴 Send caravan</button><button class="pbtn" id="trd-pact">🤝 Trade pact</button><button class="pbtn" id="trd-peace">🕊 Peace</button></div>`
         : '<p class="muted">No other villages to attack yet — invite someone, or wait for neighbours to arrive.</p>';
+      const trade = (action: string) => { const key = ($('atk-target') as HTMLSelectElement).value; this.h.trade(key, action, Number(($('trd-res') as HTMLSelectElement).value), Number(($('trd-amt') as HTMLInputElement).value) || 0, Number(($('trd-esc') as HTMLInputElement).value) || 0); };
+      for (const [id, a] of [['trd-send', 'caravan'], ['trd-pact', 'pact'], ['trd-peace', 'peace']] as const) { const b = document.getElementById(id); if (b) b.onclick = () => trade(a); }
       const go = document.getElementById('atk-go');
       if (go) go.onclick = () => {
         const key = ($('atk-target') as HTMLSelectElement).value, u = units.slice(0, 5).map(x => Number(($(`atk-${x.id}`) as HTMLInputElement).value) || 0);
