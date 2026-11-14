@@ -78,6 +78,10 @@ const EV_TRADE: i32 = 15;
 const EV_COLD: i32 = 16;
 const EV_ROBBED: i32 = 17;
 const EV_CHOICE: i32 = 18;
+/// Fog of war grid: FOG_N cells a side, each FOG_CELL units, covering the whole map.
+pub const FOG_N: i32 = 60;
+pub const FOG_CELL: f32 = 40.0;
+const EV_VISIT: i32 = 20;
 const EV_CHOSE: i32 = 19;
 /// Kinds of decision put to the player.
 pub const CH_PLAGUE: u8 = 0;
@@ -88,6 +92,7 @@ pub const CH_WINTER: u8 = 3;
 const CHOICE_DAYS: u64 = 2;
 /// Ticks in a day, days in a season (the interface uses the same numbers).
 pub const DAY: u64 = 240;
+const HALF_F: f32 = terrain::HALF;
 pub const SEASON_DAYS: u64 = 10;
 /// Grain harvest by season in percent: spring sowing, summer growth, a big autumn harvest, a barren winter.
 const GRAIN_BY_SEASON: [i32; 4] = [100, 125, 150, 25];
@@ -119,6 +124,8 @@ pub struct World {
     sick: u32,
     children: u32, // of the population: under age
     elders: u32,   // of the population: past working age
+    neutral_done: Vec<bool>,      // neutral places already visited or cleared, by index into terrain::neutrals
+    explored: Vec<u8>,            // fog of war: one cell per 40 units, 1 = seen
     choice: Option<(u8, u64)>,   // a decision waiting for the player: kind and the tick it is made for them
     mood: i32,                   // temporary lift (or drag) on happiness from the last decision
     mood_until: u64,
@@ -190,7 +197,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -203,8 +210,53 @@ impl World {
         let (x, y) = (ox as f32, oy as f32);
         let pad_h = w.base(x, y);
         w.buildings.push(Building { kind: TOWN_HALL, tier: 0, x, y, rot: 0, pad_h, progress: 0, status: 4, aux: -1, staff: 0, residents: 0, hp: battle::max_hp(TOWN_HALL, 0), burning: 0.0, garrison: 0, born: 0, opts: 0 });
+        w.neutral_done = vec![false; terrain::neutrals(seed).len()];
+        w.reveal(x, y, 110.0);
         w.after_change();
         w
+    }
+
+    /// Lift the fog in a circle.
+    pub(crate) fn reveal(&mut self, x: f32, y: f32, r: f32) {
+        let (i0, i1) = ((((x - r) + HALF_F) / FOG_CELL).floor() as i32, (((x + r) + HALF_F) / FOG_CELL).floor() as i32);
+        let (j0, j1) = ((((y - r) + HALF_F) / FOG_CELL).floor() as i32, (((y + r) + HALF_F) / FOG_CELL).floor() as i32);
+        for j in j0.max(0)..=j1.min(FOG_N - 1) { for i in i0.max(0)..=i1.min(FOG_N - 1) {
+            let (cx, cy) = (i as f32 * FOG_CELL - HALF_F + FOG_CELL / 2.0, j as f32 * FOG_CELL - HALF_F + FOG_CELL / 2.0);
+            if (cx - x).powi(2) + (cy - y).powi(2) <= (r + FOG_CELL * 0.7).powi(2) { self.explored[(j * FOG_N + i) as usize] = 1; }
+        } }
+    }
+    fn is_seen(&self, x: f32, y: f32) -> bool {
+        let (i, j) = (((x + HALF_F) / FOG_CELL) as i32, ((y + HALF_F) / FOG_CELL) as i32);
+        i >= 0 && j >= 0 && i < FOG_N && j < FOG_N && self.explored[(j * FOG_N + i) as usize] != 0
+    }
+
+    /// The fog of war: FOG_N x FOG_N cells, 1 where your people have been or can see.
+    pub fn explored_flat(&self) -> Vec<u8> { self.explored.clone() }
+    /// Neutral places you know about: [kind, x, y, done] each (kind 0 abbey, 1 ruined castle, 2 bandit camp). Unseen places are left out.
+    pub fn neutrals_flat(&self) -> Vec<f32> {
+        terrain::neutrals(self.seed).iter().enumerate().filter(|(_, n)| self.is_seen(n.1, n.2)).flat_map(|(i, n)| [n.0 as f32, n.1, n.2, self.neutral_done.get(i).copied().unwrap_or(false) as u8 as f32]).collect()
+    }
+    /// Send a field army (that has stopped near one) into a neutral place. Abbey: the sick are healed and spirits rise. Ruined castle: its hoard is carried off. Bandit camp: a fight,
+    /// won by strength, whose loser is the army (half of it falls) or the camp (cleared, its coin taken). Returns the kind (0..2) on success, -1 no such army, -2 nothing close enough, -3 already visited.
+    pub fn visit_neutral(&mut self, army_id: u32) -> i32 {
+        let Some(di) = self.dets.iter().position(|d| d.id == army_id) else { return -1 };
+        let (ax, ay, units) = (self.dets[di].x, self.dets[di].y, self.dets[di].units);
+        let list = terrain::neutrals(self.seed);
+        let Some((ni, &(kind, nx, ny))) = list.iter().enumerate().filter(|(_, n)| ((n.1 - ax).powi(2) + (n.2 - ay).powi(2)).sqrt() < 14.0).next() else { return -2 };
+        if self.neutral_done.get(ni).copied().unwrap_or(true) { return -3; }
+        let cap = self.storage_cap(); let h = terrain::h01(self.seed ^ 0x52, ni as i32, 3);
+        match kind {
+            0 => { self.sick = 0; self.mood = 12; self.mood_until = self.tick + 15 * DAY; }
+            1 => { for (r, base) in [(ST, 120), (IR, 20), (GD, 80), (PL, 60)] { let n = (base as f32 * (0.6 + h)) as i32; self.stock[r as usize] = Self::add_capped(self.stock[r as usize], n, cap); } }
+            _ => {
+                let power: f32 = (0..5).map(|k| units[k] as f32 * UNITS[k].hp * UNITS[k].dmg / UNITS[k].cd.max(0.5)).sum();
+                let camp = 9000.0 + 14000.0 * h;
+                if power >= camp { self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], 120, cap); self.stock[IR as usize] = Self::add_capped(self.stock[IR as usize], 15, cap); }
+                else { for k in 0..5 { self.dets[di].units[k] /= 2; } if self.dets[di].units.iter().all(|&u| u == 0) { self.dets.remove(di); } return kind as i32 + 100; }   // beaten: not marked done, it can be tried again
+            }
+        }
+        self.neutral_done[ni] = true; self.reveal(nx, ny, 80.0); self.push_event(EV_VISIT, kind as i32, 0);
+        kind as i32
     }
 
     fn base(&self, x: f32, y: f32) -> f32 { terrain::base_height_s(self.seed, &self.sites, x, y) }
@@ -1114,7 +1166,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -2066,5 +2118,60 @@ mod morale_tests {
         let r = w.last_report(); let l = r.len();
         let survivors: i32 = r[6..11].iter().sum();
         assert!(survivors >= r[l - 2], "fled attackers {} are among the survivors {survivors}", r[l - 2]);
+    }
+}
+
+#[cfg(test)]
+mod neutral_tests {
+    use super::*;
+    fn world() -> World { let mut w = World::new(1337, 0, 0); w.stock = [100; N_RES]; w.army = [40, 20, 20, 10, 0]; w }
+    fn army_at(w: &mut World, x: f32, y: f32, units: [u32; 5]) -> u32 { w.army = units; let id = w.det_form(&units); let i = w.dets.iter().position(|d| d.id == id).unwrap(); w.dets[i].x = x; w.dets[i].y = y; id }
+    fn first_of(seed: u64, kind: u8) -> Option<(usize, f32, f32)> { terrain::neutrals(seed).iter().enumerate().find(|(_, n)| n.0 == kind).map(|(i, n)| (i, n.1, n.2)) }
+
+    #[test]
+    fn neutral_places_sit_on_dry_land_away_from_villages() {
+        for seed in [1u64, 7, 1337, 99999] {
+            let list = terrain::neutrals(seed); assert!(list.len() >= 6, "seed {seed}: {} places", list.len());
+            for &(k, x, y) in &list { assert!(k <= 2); assert!(terrain::base_height(seed, x, y) > 1.5, "dry"); for (sx, sy) in terrain::sites(seed) { assert!((x - sx).hypot(y - sy) > 100.0, "away from villages"); } }
+            assert!([0u8, 1, 2].iter().all(|&k| list.iter().any(|n| n.0 == k)), "seed {seed} has every kind");
+        }
+    }
+
+    #[test]
+    fn the_map_starts_in_fog_and_marching_armies_lift_it() {
+        let mut w = world();
+        let seen = |w: &World| w.explored_flat().iter().filter(|&&c| c != 0).count();
+        let start = seen(&w); assert!(start > 4 && start < 80, "only the home region is known: {start}");
+        assert!(w.neutrals_flat().len() <= 4 * 8, "few places known at the start");
+        let id = w.det_form(&[10, 0, 0, 0, 0]); assert!(id > 0);
+        assert_eq!(w.det_march(id, 90.0, 0.0, false, 0.0, 0.0), 0);
+        for _ in 0..80 { w.step(); w.stock[GR as usize] = 500; }
+        assert!(seen(&w) > start, "the army saw new ground: {} > {start}", seen(&w));
+    }
+
+    #[test]
+    fn abbeys_heal_castles_pay_camps_fight_and_each_place_is_used_once() {
+        let seed = 1337;
+        let (ai, ax, ay) = first_of(seed, 0).expect("an abbey");
+        let mut w = world(); w.sick = 12; let id = army_at(&mut w, ax, ay, [5, 0, 0, 0, 0]);
+        assert_eq!(w.visit_neutral(id), 0); assert_eq!(w.sick(), 0, "the sick are healed"); assert!(w.neutral_done[ai]);
+        assert_eq!(w.visit_neutral(id), -3, "an abbey is used once");
+        let (_, cx, cy) = first_of(seed, 1).expect("a ruin");
+        let mut w = world(); let id = army_at(&mut w, cx, cy, [5, 0, 0, 0, 0]); let gold = w.stock[GD as usize];
+        assert_eq!(w.visit_neutral(id), 1); assert!(w.stock[GD as usize] > gold, "the hoard");
+        let (_, bx, by) = first_of(seed, 2).expect("a camp");
+        let mut w = world(); let weak = army_at(&mut w, bx, by, [2, 0, 0, 0, 0]);
+        assert_eq!(w.visit_neutral(weak), 102, "a weak party is beaten"); assert!(w.dets.iter().all(|d| d.units[0] <= 1), "and loses half its men");
+        let mut w = world(); let strong = army_at(&mut w, bx, by, [60, 30, 30, 20, 0]); let gold = w.stock[GD as usize];
+        assert_eq!(w.visit_neutral(strong), 2); assert!(w.stock[GD as usize] > gold, "the cleared camp pays");
+        let mut w = world(); let far = army_at(&mut w, 0.0, 0.0, [5, 0, 0, 0, 0]);
+        assert_eq!(w.visit_neutral(far), -2, "nothing near the village"); assert_eq!(w.visit_neutral(999), -1);
+    }
+
+    #[test]
+    fn visiting_a_place_reveals_it() {
+        let (_, ax, ay) = first_of(1337, 0).unwrap(); let mut w = world();
+        let before = w.neutrals_flat().len(); let id = army_at(&mut w, ax, ay, [5, 0, 0, 0, 0]); w.visit_neutral(id);
+        assert!(w.neutrals_flat().len() > before || w.is_seen(ax, ay));
     }
 }

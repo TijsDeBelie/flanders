@@ -127,6 +127,7 @@ function applyCmd(w: World, c: Cmd) {
     case 'bridge': w.drawbridge_set(c.idx!, (c.kind ?? 0) === 1); break;
     case 'option': w.set_option(c.idx!, c.kind ?? 0, (c.x ?? 1) === 1); break;
     case 'flatten': w.flatten(c.x ?? 60); break;
+    case 'visit': w.visit_neutral(c.idx!); break;
     case 'choose': w.choose(c.kind ?? 0); break;
     case 'treaty': if ((c.y ?? 1) === 0) w.treaty_end(c.idx!, c.kind ?? 0); else w.treaty_set(c.idx!, c.kind ?? 0, c.x ?? 10); break;
     case 'caravan': w.caravan_send(c.kind ?? 0, c.x ?? 0, c.idx ?? 0, c.y ?? 0, c.ax ?? 0); break;
@@ -1128,7 +1129,7 @@ function frame(now: number) {
     const mapV = (v: Village, color: string, name: string): MapVillage => { const f = v.world.buildings_flat(), b: MapVillage['buildings'] = []; for (let i = 0; i < f.length; i += 10) b.push({ x: f[i + 2], z: f[i + 3], r: shared.radii[f[i]], kind: f[i] }); return { x: v.ox, z: v.oz, r: v.radius, color, name, buildings: b }; };
     const villages = [mapV(lv, '#5f8fe0', myName), ...[...rivals.values()].map(r => mapV(r.village, '#e05f5f', r.name))];
     const armies = [lv, ...[...rivals.values()].map(r => r.village)].flatMap((v, k) => v.field.ids().map(id => ({ ...v.field.position(id)!, color: k ? '#ff8a7a' : '#8fb8ff' })));
-    const mo = { villages, armies, deposits: lv.world.deposits_flat(), showDeposits, view, target: { x: rig.target.x, z: rig.target.z } };
+    const mo = { fog: lv.world.explored_flat(), neutrals: lv.world.neutrals_flat(), villages, armies, deposits: lv.world.deposits_flat(), showDeposits, view, target: { x: rig.target.x, z: rig.target.z } };
     minimap.draw(mo); if (ui.mapOpen()) bigMap.draw(mo);
   }
   perf.stop('labels + minimap');

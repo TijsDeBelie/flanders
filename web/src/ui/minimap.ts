@@ -47,7 +47,7 @@ export class Minimap {
     return base;
   }
 
-  draw(o: { villages: MapVillage[]; armies?: { x: number; z: number; color: string }[]; deposits: Float32Array; showDeposits: boolean; view: { x: number; z: number }[] | null; target: { x: number; z: number } }) {
+  draw(o: { fog?: Uint8Array; neutrals?: Float32Array; villages: MapVillage[]; armies?: { x: number; z: number; color: string }[]; deposits: Float32Array; showDeposits: boolean; view: { x: number; z: number }[] | null; target: { x: number; z: number } }) {
     const c = this.ctx, S = this.S, big = S > 400, f = S / (HALF * 2);
     c.drawImage(this.bg, 0, 0);
     if (o.showDeposits) for (let i = 0; i < o.deposits.length; i += 5) {
@@ -71,6 +71,11 @@ export class Minimap {
       const [x, y] = this.p(a.x, a.z), r = big ? 5 : 3.2;
       c.fillStyle = a.color; c.strokeStyle = '#000d'; c.lineWidth = 1; c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y); c.closePath(); c.fill(); c.stroke();
     }
+    // neutral places you have found: abbey, ruined castle, bandit camp
+    const marks = ['✚', '♜', '⚔'];
+    if (o.neutrals) for (let i = 0; i + 3 < o.neutrals.length; i += 4) { const [x, y] = this.p(o.neutrals[i + 1], o.neutrals[i + 2]); c.globalAlpha = o.neutrals[i + 3] ? 0.45 : 1; c.fillStyle = '#ffe9a8'; c.strokeStyle = '#000c'; c.lineWidth = 2; c.font = `${big ? 16 : 11}px sans-serif`; c.textAlign = 'center'; c.strokeText(marks[o.neutrals[i]], x, y + 4); c.fillText(marks[o.neutrals[i]], x, y + 4); c.globalAlpha = 1; }
+    // the fog of war: ground nobody has seen is dimmed
+    if (o.fog) { const N = Math.round(Math.sqrt(o.fog.length)), cs = S / N; c.fillStyle = 'rgba(8,10,14,0.62)'; for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) if (!o.fog[j * N + i]) c.fillRect(i * cs, j * cs, cs + 0.6, cs + 0.6); }
     if (o.view && o.view.length === 4) {
       c.strokeStyle = '#ffffffcc'; c.lineWidth = big ? 2 : 1.2; c.beginPath();
       o.view.forEach((q, i) => { const [x, y] = this.p(q.x, q.z); i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.closePath(); c.stroke();

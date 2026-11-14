@@ -192,6 +192,35 @@ fn tunnels_uncached(seed: u64) -> Vec<[f32; 4]> {
     out
 }
 
+/// Neutral places scattered over the map: (kind, x, y). 0 abbey (heals), 1 ruined castle (loot), 2 bandit camp (to be cleared). Worked out from the natural terrain: on dry,
+/// gentle ground, away from every village site, one candidate per 160-unit cell, chosen by hash.
+pub fn neutrals(seed: u64) -> Vec<(u8, f32, f32)> {
+    thread_local! { static N: std::cell::RefCell<Vec<(u64, Vec<(u8, f32, f32)>)>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    N.with(|c| {
+        if let Some((_, v)) = c.borrow().iter().find(|(s, _)| *s == seed) { return v.clone(); }
+        let v = neutrals_uncached(seed);
+        let mut b = c.borrow_mut(); if b.len() > 8 { b.remove(0); } b.push((seed, v.clone()));
+        v
+    })
+}
+
+fn neutrals_uncached(seed: u64) -> Vec<(u8, f32, f32)> {
+    let s = sites(seed); let mut out = vec![];
+    let n = (HALF / 160.0) as i32;
+    for cy in -n..n { for cx in -n..n {
+        if h01(seed ^ 0x4E, cx, cy) > 0.38 { continue; }
+        let x = (cx as f32 + 0.15 + 0.7 * h01(seed ^ 0x4F, cx, cy)) * 160.0;
+        let y = (cy as f32 + 0.15 + 0.7 * h01(seed ^ 0x50, cx, cy)) * 160.0;
+        if x.abs() > HALF - 80.0 || y.abs() > HALF - 80.0 { continue; }
+        let h = base_height_s(seed, &s, x, y);
+        if h < 2.0 || h > 40.0 || slope(seed, x, y) > 0.5 { continue; }
+        if site_dist(&s, x, y) < 110.0 { continue; }
+        let k = h01(seed ^ 0x51, cx, cy); let kind = if k < 0.3 { 0 } else if k < 0.6 { 1 } else { 2 };
+        out.push((kind, x, y));
+    } }
+    out
+}
+
 pub fn base_height(seed: u64, x: f32, y: f32) -> f32 { base_height_s(seed, &sites(seed), x, y) }
 
 /// Row-major grid of nx*ny heights starting at (x0,y0) with spacing `step`.
