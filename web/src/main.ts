@@ -28,6 +28,7 @@ import { Sound } from './audio';
 import { Minimap, type MapVillage } from './ui/minimap';
 import { Tunnels } from './render/tunnels';
 import { startAgentBridge } from './agent';
+import { territoryOutline } from './render/border';
 import { showChoice } from './ui/choicebox';
 import { showPopulationInfo } from './ui/hudinfo';
 import { Identity, Room, tagOf, type Cmd, type Signed, type Hello } from './net/p2p';
@@ -90,7 +91,9 @@ let perf!: Perf;
 let selectedKind: number | null = null, rot = 0, ghost: THREE.Group | null = null, ghostCode = 99;
 let selectedIdx: number | null = null;
 const selRing = new THREE.Mesh(new THREE.RingGeometry(1, 1.12, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.9, depthTest: false }));
-const borderRing = new THREE.Mesh(new THREE.RingGeometry(1, 1.012, 160).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.5 }));
+/** The border of the land you hold: the outline of the union of a patch round every building (not a circle). */
+const borderRing = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.6 }));
+borderRing.frustumCulled = false; let borderKey = '';
 let speed = 1, acc = 0, showDeposits = false;
 const rates = new Array(RES.length).fill(0);
 const depLabels: HTMLElement[] = [];
@@ -620,7 +623,7 @@ async function startGame(name: string, username: string) {
   setInterval(() => { save(); updatePeers(); }, 8000);
   updateGoals();
   ui.enterGame();                       // everything is ready: reveal the game
-  (window as unknown as { __dbg: unknown }).__dbg = { get lv() { return lv; }, rig, get terrain() { return terrain; }, view: (x: number, z: number, dist: number, yaw: number, pitch: number) => { const g = (rig as unknown as { goal: Record<string, number> }).goal; Object.assign(g, { x, z, dist, yaw, pitch }); rig.snap(); }, cheat: (a: number, x: number, y: number) => doCheat(a, x, y), select: (i: number | null) => selectBuilding(i), kind: (k: number | null) => selectKind(k), get tunnels() { return tunnels; } };
+  (window as unknown as { __dbg: unknown }).__dbg = { get lv() { return lv; }, rig, get terrain() { return terrain; }, view: (x: number, z: number, dist: number, yaw: number, pitch: number) => { const g = (rig as unknown as { goal: Record<string, number> }).goal; Object.assign(g, { x, z, dist, yaw, pitch }); rig.snap(); }, cheat: (a: number, x: number, y: number) => doCheat(a, x, y), select: (i: number | null) => selectBuilding(i), kind: (k: number | null) => selectKind(k), after: () => afterLocalChange(), get tunnels() { return tunnels; } };
   last = performance.now(); requestAnimationFrame(frame);
 }
 
@@ -687,7 +690,14 @@ function updateHud() {
     army: Array.from(w.army()), queued: Array.from(w.queued()), away: Array.from(w.away()), guards: w.guards(), barracks, wildlife: wildlife.count,
   });
   ui.maxAttack(Array.from(w.army())); updateDets();
-  const r = borderRing; const rad = w.build_radius(); r.scale.set(rad, 1, rad); r.position.set(lv.ox, terrain.heightAt(lv.ox, lv.oz) + 0.6, lv.oz);
+  { // the border follows what has been built; redrawn only when the land changed
+    const key = `${w.building_count()}:${w.build_radius()}:${w.terrain_version()}`;
+    if (key !== borderKey) {
+      borderKey = key; const segs = territoryOutline(w.territory_flat()), pos = new Float32Array((segs.length / 2) * 3);
+      for (let i = 0; i < segs.length; i += 2) { pos[(i / 2) * 3] = segs[i]; pos[(i / 2) * 3 + 1] = terrain.heightAt(segs[i], segs[i + 1]) + 0.5; pos[(i / 2) * 3 + 2] = segs[i + 1]; }
+      borderRing.geometry.dispose(); const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); borderRing.geometry = g;
+    }
+  }
 }
 
 function battleBanner() {

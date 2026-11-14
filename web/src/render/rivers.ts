@@ -2,6 +2,15 @@ import * as THREE from 'three';
 import type { Terrain } from './terrain';
 
 const S = 10, MOAT = 24, RIVER = 32, MAXP = 1500;
+/** Radii of the flat bottom of a moat piece (before its width setting) and of a river piece: the same numbers as the core's. */
+export const CHANNEL = { moatFloor: 3.0, riverFloor: 2.0, bank: 1.6 };
+
+/** The water level for a sealed channel piece: just under the lowest of the highest ground round it, found on a ring outside the steep bank. Never below the sealed level. */
+export function channelLevel(terrain: Terrain, x: number, z: number, floor: number): number {
+  const r = floor + CHANNEL.bank + 0.9; let rim = -1e9;
+  for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; rim = Math.max(rim, terrain.heightAt(x + Math.cos(a) * r, z + Math.sin(a) * r)); }
+  return Math.max(SEALED_LEVEL, rim - 0.35);
+}
 /** Surface level of water that is sealed off from any sea or lake: it stays full whatever the tide does. */
 export const SEALED_LEVEL = 0.04;
 
@@ -31,7 +40,7 @@ export class RiverFlow {
   private pond: THREE.InstancedMesh;
   private uTime = { value: 0 };
   private sig = '';
-  private ripple: { x: number; z: number; connected: boolean }[] = [];
+  private ripple: { x: number; z: number; connected: boolean; level: number }[] = [];
   private level = 0;
 
   constructor(private terrain: Terrain) {
@@ -52,7 +61,7 @@ export class RiverFlow {
     });
     this.mesh = new THREE.InstancedMesh(geo, mat, MAXP); this.mesh.count = 0; this.mesh.frustumCulled = false; this.mesh.renderOrder = 3;
     const pondGeo = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
-    const pondMat = new THREE.MeshStandardMaterial({ color: 0x3f7fa8, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.86, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const pondMat = new THREE.MeshStandardMaterial({ color: 0x2f6f98, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.93, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
     this.pond = new THREE.InstancedMesh(pondGeo, pondMat, MAXP); this.pond.count = 0; this.pond.frustumCulled = false; this.pond.renderOrder = 2;
     this.group.add(this.pond, this.mesh);
   }
@@ -65,8 +74,11 @@ export class RiverFlow {
     const flags = connectedFlags(this.terrain, items), dir = this.mesh.geometry.getAttribute('aDir') as THREE.InstancedBufferAttribute, m = new THREE.Matrix4(), sc = new THREE.Vector3();
     let nr = 0, np = 0; this.ripple = [];
     items.forEach((q, i) => {
-      if (q.kind === RIVER && nr < MAXP) { const a = q.rot * Math.PI / 4; dir.setXY(nr, Math.cos(a), -Math.sin(a)); this.ripple.push({ x: q.x, z: q.z, connected: flags[i] }); nr++; }
-      if (!flags[i] && np < MAXP) { const r = q.kind === MOAT ? 3.5 * (1 + 0.13 * (q.rot & 7)) : 2.4; sc.set(r, 1, r); m.compose(new THREE.Vector3(q.x, SEALED_LEVEL, q.z), new THREE.Quaternion(), sc); this.pond.setMatrixAt(np++, m); }
+      // a channel that is sealed off from the sea is a trench with its water close to the brim: the surface is the lowest of the surrounding land, less a hand's breadth, so the banks
+      // are not left standing bare. Where the bank is a step the water sits behind it, and the terrain hides the rest, so it never spills over the edge.
+      const floor = q.kind === MOAT ? CHANNEL.moatFloor * (1 + 0.13 * (q.rot & 7)) : CHANNEL.riverFloor, level = flags[i] ? SEALED_LEVEL : channelLevel(this.terrain, q.x, q.z, floor);
+      if (q.kind === RIVER && nr < MAXP) { const a = q.rot * Math.PI / 4; dir.setXY(nr, Math.cos(a), -Math.sin(a)); this.ripple.push({ x: q.x, z: q.z, connected: flags[i], level }); nr++; }
+      if (!flags[i] && np < MAXP) { const r = floor + 1.1; sc.set(r, 1, r); m.compose(new THREE.Vector3(q.x, level, q.z), new THREE.Quaternion(), sc); this.pond.setMatrixAt(np++, m); }
     });
     this.mesh.count = nr; this.pond.count = np; this.pond.instanceMatrix.needsUpdate = true; dir.needsUpdate = true;
     this.placeRipples(this.level, true);
@@ -75,7 +87,7 @@ export class RiverFlow {
   private placeRipples(level: number, force = false) {
     if (!force && Math.abs(level - this.level) < 0.004) return; this.level = level;
     const m = new THREE.Matrix4();
-    this.ripple.forEach((q, i) => { m.makeTranslation(q.x, (q.connected ? level : SEALED_LEVEL) + 0.05, q.z); this.mesh.setMatrixAt(i, m); });
+    this.ripple.forEach((q, i) => { m.makeTranslation(q.x, (q.connected ? level : q.level) + 0.05, q.z); this.mesh.setMatrixAt(i, m); });
     this.mesh.instanceMatrix.needsUpdate = true;
   }
 

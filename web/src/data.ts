@@ -28,15 +28,15 @@ export const CATS = [
   { name: 'Industry', icon: '⚒️' }, { name: 'Defence', icon: '🛡️' }, { name: 'Civic', icon: '⛪' }, { name: 'Land', icon: '⛰️' },
 ];
 
-export const KIND_ICON = ['🏠', '🌾', '🧱', '🗼', '🪓', '🪚', '🪨', '🟤', '🏺', '⛏️', '💰', '♨️', '🔥', '⚒️', '🪙', '🏰', '🕳️', '⛪', '🏹', '⚔️', '🛠️', '🪵', '🚪', '🌉', '🌊', '📦', '🏯', '⚖️', '🏪', '☸️', '🥕', '🌳', '🏞️', '⛰️', '🕳️', '⚓', '🚧'];
+export const KIND_ICON = ['🏠', '🌾', '🧱', '🗼', '🪓', '🪚', '🪨', '🟤', '🏺', '⛏️', '💰', '♨️', '🔥', '⚒️', '🪙', '🏰', '🕳️', '⛪', '🏹', '⚔️', '🛠️', '🪵', '🚪', '🌉', '🌊', '📦', '🏯', '⚖️', '🏪', '☸️', '🥕', '🌳', '🏞️', '⛰️', '🕳️', '⚓', '🚧', '🛤️'];
 
 /** Kinds without a levelled pad under them (walls, fences, gates, drawbridges, moats). */
-export const NOPAD = new Set([2, 21, 22, 23, 24, 32, 33, 34]);
+export const NOPAD = new Set([2, 21, 22, 23, 24, 32, 33, 34, 37]);
 /** Kinds the wall pen can draw in one stroke, and the distance between the pieces it lays. */
 /** Banner colours a village can fly: style 0 is the default of the player's own village (blue) and of a neighbour's (red). */
 export const BANNER_STYLES = [0, 0x2f5fa8, 0xb03030, 0x2f8a4a, 0xc9a227, 0x7a3f9a, 0x1f1f1f];
 export const BANNER_NAMES = ['Default', 'Blue', 'Crimson', 'Green', 'Gold', 'Purple', 'Black'];
-export const PEN_SPACING: Record<number, number> = { 0: 7, 1: 14, 30: 7.2, 2: 6, 21: 4, 24: 4, 32: 4, 33: 4, 34: 4 };
+export const PEN_SPACING: Record<number, number> = { 0: 7, 1: 14, 30: 7.2, 37: 4, 2: 6, 21: 4, 24: 4, 32: 4, 33: 4, 34: 4 };
 
 const GENERIC_TIERS = ['Rustic', 'Timber', 'Stone', 'Fortified'];
 export const TIER_NAMES: Record<number, string[]> = {
@@ -49,7 +49,7 @@ export const TIER_NAMES: Record<number, string[]> = {
   19: ['Drill Yard', 'Garrison', 'Barracks', 'Fortress'],
   20: ["Carpenter's Shed", "Builders' Yard", "Masons' Lodge", 'Guild Hall'],
   25: ['Storehouse', 'Warehouse', 'Stone Warehouse', 'Great Warehouse'], 26: ['Motte Tower', 'Stone Keep', 'Great Keep', 'Citadel'], 27: ['Moot Hall', 'Courthouse', 'Assize Hall', 'Royal Court'], 28: ['Market Stalls', 'Market Square', 'Market Hall', 'Grand Market'], 29: ['Mill Wheel', 'Watermill', 'Stone Mill', 'Great Mill'], 30: ['Kitchen Garden', 'Herb Garden', 'Walled Garden', 'Pleasure Garden'], 31: ['Green', 'Park', 'Gardens', 'Royal Park'], 32: ['River'], 33: ['Raised Ground'], 34: ['Lowered Ground'],
-  35: ['Landing Stage', 'Harbour', 'Port', 'Great Port'], 36: ['Toll Post', 'Toll House', 'Toll Gate', 'Customs House'],
+  35: ['Landing Stage', 'Harbour', 'Port', 'Great Port'], 36: ['Toll Post', 'Toll House', 'Toll Gate', 'Customs House'], 37: ['Dirt Road'],
   21: ['Spiked Logs'], 22: ['Wooden Gate', 'Timber Gate', 'Stone Gatehouse', 'Fortified Gatehouse'], 23: ['Drawbridge'], 24: ['Moat'],
 };
 export const tierName = (kind: number, tier: number) => (TIER_NAMES[kind] ?? GENERIC_TIERS)[tier];

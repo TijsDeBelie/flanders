@@ -91,7 +91,7 @@ function makeMats() {
 const M = () => (_m ??= makeMats());
 /** Wall materials by tier: palisade, timber, stone, battlemented stone. */
 /** Kinds drawn by something else (walls, fences and gates by the Walls mesh, moats by the terrain): an empty placeholder keeps the indices lined up. */
-const PLAIN = new Set([2, 21, 22, 24, 32, 33, 34]);
+const PLAIN = new Set([2, 21, 22, 24, 32, 33, 34, 37]);
 export const wallMats = (): THREE.MeshStandardMaterial[] => [M().wood, M().timber, M().stone, M().stone];
 
 // ---------- geometry helpers ----------

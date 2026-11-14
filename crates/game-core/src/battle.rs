@@ -247,7 +247,7 @@ impl World {
         let ratio = [left[0] as f32 / b.start_side[0].max(1) as f32, left[1] as f32 / b.start_side[1].max(1) as f32];
         // walls, fences and gates stop attackers; moats and rivers too unless bridged
         let bars: Vec<(usize, f32, f32, f32, u8)> = self.buildings.iter().enumerate().filter(|(_, x)| x.hp > 0.0 && matches!(x.kind, WALL | FENCE | GATE)).map(|(k, x)| (k, x.x, x.y, if x.kind == FENCE { 1.9 } else { 2.6 }, x.kind)).collect();
-        let wet: Vec<(f32, f32, f32)> = self.buildings.iter().filter(|x| matches!(x.kind, MOAT | RIVER)).map(|x| (x.x, x.y, if x.kind == MOAT { 2.7 * moat_scale(x) } else { 2.7 })).collect();
+        let wet: Vec<(f32, f32, f32)> = self.buildings.iter().filter(|x| matches!(x.kind, MOAT | RIVER)).map(|x| (x.x, x.y, if x.kind == MOAT { MOAT_FLOOR * moat_scale(x) + 0.5 } else { RIVER_FLOOR + 0.5 })).collect();
         for si in 0..b.spots.len() { let busy = b.units.iter().any(|q| q.alive && q.climb > 0.0 && q.spot == si as i32); b.spots[si][3] = if busy { 1.0 } else { 0.0 }; }
         for i in 0..n {
             if !b.units[i].alive { continue; }
@@ -338,7 +338,7 @@ impl World {
                 // attackers go for the nearest building
                 let mut tb = usize::MAX; let mut td = f32::MAX;
                 for (k, bd2) in self.buildings.iter().enumerate() {
-                    if bd2.hp <= 0.0 { continue; }
+                    if bd2.hp <= 0.0 || bd2.kind == ROAD { continue; }   // nobody storms a dirt road
                     let d = (bd2.x - u.x).powi(2) + (bd2.y - u.y).powi(2);
                     if d < td { td = d; tb = k; }
                 }

@@ -49,14 +49,17 @@ pub fn moat_scale(b: &Building) -> f32 { 1.0 + 0.13 * (b.rot & 7) as f32 }
 /// Walls, fences, gates and moat pieces are not on the village path network.
 fn is_barrier(kind: u8) -> bool { matches!(kind, WALL | FENCE | GATE) || is_edit(kind) }
 const LEVEL_BLEND: f32 = 9.0;  // how far a levelled patch of ground blends back into the land
-const MOAT_FLOOR: f32 = 2.4; // flat bottom radius of a moat piece
-const MOAT_BANK: f32 = 6.0;  // where its banks meet the land
+pub(crate) const MOAT_FLOOR: f32 = 3.0;  // flat bottom radius of a moat piece
+pub(crate) const RIVER_FLOOR: f32 = 2.0; // and of a river piece
+const CHANNEL_BANK: f32 = 1.6;           // how far the steep bank runs out beyond the floor: a channel is a trench with the water at its brim, not a wide dish
 const MOAT_BED: f32 = -1.4;
 const RIVER_BED: f32 = -0.7; // a river is shallower than a moat  // depth of the bottom
 const ROAD_INNER: f32 = 1.5; // fully graded half-width of a path
 const ROAD_OUTER: f32 = 4.4; // terrain blends back to the natural slope by here
 
-const RADIUS_CAP: f32 = 72.0;
+const RADIUS_CAP: f32 = 110.0;
+/// The farthest from the town hall anything can be built, however far the territory has crept outwards.
+const TERRITORY_MAX: f32 = 170.0;
 
 // event codes
 const EV_HARVEST: i32 = 0;
@@ -407,7 +410,7 @@ impl World {
         if moats {
             for b in self.buildings.iter().filter(|b| is_edit(b.kind)) {
                 let (dx, dy) = (x - b.x, y - b.y);
-                let (floor, bank) = if b.kind == MOAT { (MOAT_FLOOR * moat_scale(b), MOAT_BANK * moat_scale(b)) } else { (1.2, 5.0) };
+                let (floor, bank) = match b.kind { MOAT => (MOAT_FLOOR * moat_scale(b), MOAT_FLOOR * moat_scale(b) + CHANNEL_BANK), RIVER => (RIVER_FLOOR, RIVER_FLOOR + CHANNEL_BANK), _ => (1.2, 5.0) };
                 if dx.abs() > bank || dy.abs() > bank { continue; }
                 let dist = (dx * dx + dy * dy).sqrt();
                 if dist >= bank { continue; }
@@ -477,7 +480,30 @@ impl World {
 
     pub fn build_radius(&self) -> u32 {
         let w: u32 = self.buildings.iter().map(|b| DEFS[b.kind as usize].weight * (b.tier as u32 + 1)).sum();
-        ((22.0 + 5.0 * (w as f32).sqrt()).min(RADIUS_CAP)) as u32
+        ((24.0 + 7.0 * (w as f32).sqrt()).min(RADIUS_CAP)) as u32
+    }
+
+    /// How far a building claims land round itself (0 for earthworks). The town hall claims the circle of `build_radius`; every other building, and every piece of road, claims a patch round it,
+    /// so a village grows outwards where its people build, in the shape of what they built, not as a circle.
+    fn claim(&self, b: &Building) -> f32 {
+        match b.kind {
+            TOWN_HALL => self.build_radius() as f32,
+            k if is_edit(k) => 0.0,
+            ROAD => 6.0,
+            WALL | FENCE | GATE | DRAWBRIDGE => 5.0,
+            k => 10.0 + 2.5 * ((DEFS[k as usize].weight * (b.tier as u32 + 1)) as f32).sqrt(),
+        }
+    }
+    /// Is this spot inside the village's land: near the town hall, or near something built on its edge (never farther than TERRITORY_MAX from the hall)?
+    pub fn in_territory(&self, x: f32, y: f32) -> bool {
+        let (hx, hy) = (self.buildings[0].x, self.buildings[0].y);
+        let dh = ((x - hx).powi(2) + (y - hy).powi(2)).sqrt();
+        if dh > TERRITORY_MAX { return false; }
+        self.buildings.iter().any(|b| { let c = self.claim(b); c > 0.0 && (x - b.x).abs() <= c && (y - b.y).abs() <= c && ((x - b.x).powi(2) + (y - b.y).powi(2)) <= c * c })
+    }
+    /// The land the village holds, as discs [x, y, radius]: the hall's circle and a patch round every building. The border is the outline of their union.
+    pub fn territory_flat(&self) -> Vec<f32> {
+        self.buildings.iter().filter_map(|b| { let c = self.claim(b); if c > 0.0 { Some([b.x, b.y, c]) } else { None } }).flatten().collect()
     }
 
     /// -17 a deposit is in the way, -16 needs water.
@@ -487,8 +513,7 @@ impl World {
         let Some(d) = DEFS.get(kind as usize) else { return -1 };
         if kind == TOWN_HALL { return -9; }
         let (x, y) = ((self.ox + dx) as f32, (self.oy + dy) as f32);
-        let r = self.build_radius() as f32;
-        if (dx as f32).powi(2) + (dy as f32).powi(2) > r * r { return -2; }
+        if !self.in_territory(x, y) { return -2; }
         for b in &self.buildings {
             let bd = &DEFS[b.kind as usize];
             if (kind == DRAWBRIDGE && matches!(b.kind, MOAT | RIVER)) || (matches!(kind, MOAT | RIVER) && b.kind == DRAWBRIDGE) { continue; }   // a drawbridge spans the water
@@ -2466,5 +2491,107 @@ mod district_tests {
         assert!(w.place_row(HOUSE, 10, 0, 10, 30, 8, 5, 9).is_empty(), "no such side"); assert!(w.place_row(200, 10, 0, 10, 30, 8, 5, 1).is_empty(), "no such kind");
         assert!(w.set_style(3) && w.style() == 3); assert!(!w.set_style(9) && w.style() == 3);
         let a = rich().state_hash(); let mut b = rich(); b.set_style(2); assert_ne!(a, b.state_hash(), "the style is part of the state");
+    }
+}
+
+#[cfg(test)]
+mod territory_tests {
+    use super::*;
+    fn rich() -> World { let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0); w }
+
+    #[test]
+    fn the_border_grows_with_the_village_up_to_a_cap() {
+        let mut w = rich(); let r0 = w.build_radius();
+        for k in 0..3 { w.upgrade(0); let _ = k; }
+        let r1 = w.build_radius(); assert!(r1 > r0 + 15, "the hall's circle grows: {r0} -> {r1}");
+        for (x, y) in [(14, 4), (20, 8), (-14, 6), (-20, 12), (6, 26), (-6, 26)] { w.place(HOUSE, x, y, 0); }
+        assert!(w.build_radius() > r1, "and every building widens it");
+        w.stock = [1_000_000; N_RES];
+        for k in 0..40 { w.place(KEEP, 30 + k, 30, 0); w.place(STOREHOUSE, -30 - k, 30, 0); }
+        assert!(w.build_radius() as f32 <= RADIUS_CAP);
+    }
+
+    #[test]
+    fn the_land_is_not_a_circle_it_follows_what_was_built() {
+        let mut w = rich(); let r = w.build_radius() as i32;
+        // a spot just outside the hall's circle cannot be built on ...
+        let far = r + 12; assert_eq!(w.can_place(HOUSE, far, 0), -2, "outside the border");
+        // ... until something is built at the edge, which claims land round itself
+        let edge = r - 6; let i = w.place(HOUSE, edge, 0, 0); assert!(i >= 0, "a house at the edge: {i}");
+        assert_eq!(w.can_place(HOUSE, edge + 12, 0), 0, "land beyond the house is now yours");
+        assert_eq!(w.can_place(HOUSE, 0, far), -2, "but not in the other directions: the border is a shape, not a circle");
+        let t = w.territory_flat(); assert_eq!(t.len() % 3, 0); assert!(t.len() >= 6, "the hall and the house claim discs");
+    }
+
+    #[test]
+    fn creeping_outwards_stops_at_the_far_limit() {
+        let mut w = rich();
+        let mut x = w.build_radius() as i32 - 6; let mut last = x;
+        for _ in 0..60 { if w.place(ROAD, x, 0, 0) >= 0 { last = x; } x += 5; }
+        assert!(last as f32 <= TERRITORY_MAX, "the road stopped at {last}");
+        assert_eq!(w.can_place(HOUSE, TERRITORY_MAX as i32 + 30, 0), -2);
+    }
+}
+
+#[cfg(test)]
+mod road_piece_tests {
+    use super::*;
+    fn rich() -> World { let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0); w }
+
+    #[test]
+    fn road_pieces_link_into_the_path_network_like_the_automatic_roads() {
+        let mut w = rich(); let before = w.roads_flat().len();
+        let pieces: Vec<i32> = (0..8).map(|k| w.place(ROAD, 14 + k * 4, 6, 0)).collect();
+        assert!(pieces.iter().all(|&i| i >= 0), "the road can be laid: {pieces:?}");
+        assert!(w.roads_flat().len() >= before + 6 * 6, "each piece is joined to its neighbour by a stretch of path");
+        // the chain ends at the hall: every piece has a walkable route
+        let v = w.road_paths_flat(); let mut linked = std::collections::HashSet::new(); let mut i = 0;
+        while i < v.len() { linked.insert(v[i] as i32); i += 3 + 2 * v[i + 2] as usize; }
+        for &p in &pieces { assert!(linked.contains(&p), "piece {p} has a route"); }
+    }
+
+    #[test]
+    fn a_house_beyond_the_road_joins_it_and_roads_do_not_block_the_way() {
+        let mut w = rich();
+        for k in 0..6 { w.place(ROAD, 16 + k * 4, 4, 0); }
+        let h = w.place(HOUSE, 36, 12, 0); assert!(h >= 0);
+        let v = w.road_paths_flat(); let mut i = 0; let mut found = false;
+        while i < v.len() { if v[i] as i32 == h { found = true; } i += 3 + 2 * v[i + 2] as usize; }
+        assert!(found, "the house is connected through the road pieces");
+        // a field army walks straight over a road (nothing blocks it)
+        w.army = [10, 0, 0, 0, 0]; let id = w.det_form(&[10, 0, 0, 0, 0]); assert!(id > 0);
+        assert_eq!(w.det_march(id, 40.0, 4.0, false, 0.0, 0.0), 0, "a route over the road exists");
+    }
+
+    #[test]
+    fn roads_are_cheap_cannot_go_in_water_and_are_not_raid_targets() {
+        let mut w = rich(); let wood = w.stocks()[W as usize]; w.place(ROAD, 14, 4, 0);
+        assert_eq!(w.stocks()[W as usize], wood - 1, "one wood a piece");
+        let mut sea = rich(); let probe = (-600..600).step_by(40).flat_map(|x| (-600..600).step_by(40).map(move |y| (x, y))).find(|&(x, y)| sea.base(x as f32, y as f32) < 0.0);
+        if let Some((x, y)) = probe { assert!(sea.can_place(ROAD, x, y) < 0, "no road in the sea"); }
+        // raiders ignore dirt roads: with only road pieces besides the hall, they still go for the hall
+        let mut w = rich(); for k in 0..5 { w.place(ROAD, 12 + k * 4, 0, 0); }
+        assert!(w.start_raid(1.0, &[4, 0, 0, 0, 0], 0));
+        for _ in 0..40 { w.step(); }
+        assert!(w.buildings.iter().filter(|b| b.kind == ROAD).all(|b| b.hp >= battle::max_hp(ROAD, 0) - 0.01), "no road was damaged");
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+    #[test]
+    fn a_moat_is_a_trench_with_steep_banks() {
+        let mut w = World::new(1337, 0, 0); w.stock = [9999; N_RES]; w.flatten(40);
+        let i = w.place(MOAT, 20, 0, 0); assert!(i >= 0);
+        let (x, y) = (w.buildings[i as usize].x, w.buildings[i as usize].y); let ground = w.base(x + 12.0, y);
+        assert!(w.height_at(x, y) < -1.0, "the bed is below the water");
+        let edge = MOAT_FLOOR + CHANNEL_BANK;
+        assert!((w.height_at(x, y + edge + 0.2) - w.height_at(x, y + 12.0)).abs() < 0.2, "the bank has reached the land by {edge:.1}");
+        let wet_edge = (0..80).map(|k| k as f32 * 0.1).find(|&d| w.height_at(x, y + d) >= 0.2).unwrap();
+        assert!(wet_edge > MOAT_FLOOR - 0.2 && wet_edge < edge, "the water ends on the steep bank, {wet_edge:.1} out");
+        let _ = ground;
+        // the bank is steep: from the water's edge to the land in about a unit and a half
+        assert!(w.height_at(x, y + edge) - w.height_at(x, y + wet_edge) > 4.0, "a real step up from the water to the land");
     }
 }

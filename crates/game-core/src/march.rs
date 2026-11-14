@@ -126,8 +126,8 @@ impl World {
         let mut ov = Ov { blocked: vec![false; n], cleared: vec![false; n], bridge: vec![false; n], moat: vec![false; n] };
         for b in &self.buildings {
             match b.kind {
-                GATE => {}                                                    // an opening in the wall: nothing blocks it
-                MOAT | RIVER => stamp(&mut ov.moat, b.x, b.y, 2.4 * if b.kind == MOAT { moat_scale(b) } else { 1.0 }),           // water to cross
+                GATE | ROAD => {}                                             // an opening in the wall, or a road: nothing blocks it
+                MOAT | RIVER => stamp(&mut ov.moat, b.x, b.y, if b.kind == MOAT { MOAT_FLOOR * moat_scale(b) } else { RIVER_FLOOR } + 0.5),           // water to cross
                 RAISE | LOWER => {}
                 DRAWBRIDGE if b.status == 5 || self.battle.is_some() => {}   // drawn up: no way across
                 DRAWBRIDGE => {                                               // a way across for your own armies
@@ -392,7 +392,7 @@ impl World {
         for (k, q) in self.buildings.iter().enumerate() {
             if k == ia || k == ib { continue; }
             match q.kind {
-                GATE | MOAT | RIVER | RAISE | LOWER => {}
+                GATE | MOAT | RIVER | RAISE | LOWER | ROAD => {}
                 DRAWBRIDGE => {
                     if q.status == 5 || self.battle.is_some() { continue; }
                     let an = q.rot as f32 * std::f32::consts::FRAC_PI_4; let (sx, sy) = (an.sin(), an.cos());

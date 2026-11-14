@@ -59,7 +59,8 @@ export class Paths {
       const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz) || 1, ux = dx / len, uz = dz / len;
       // a route has several stretches: only the first steps back from its child building and the last from its parent
       const atChild = Math.hypot(ax - buildings[child * S + 2], az - buildings[child * S + 3]) < radii[kc] + 1, atParent = Math.hypot(bx - buildings[parent * S + 2], bz - buildings[parent * S + 3]) < radii[kp] + 1;
-      const t0 = atChild ? radii[kc] * 0.6 : 0, t1 = len - (atParent ? radii[kp] * 0.6 : 0);
+      // a stretch steps back from a building's walls, but not from a piece of road (they must join up, with no gaps between them)
+      const t0 = atChild && kc !== 37 ? radii[kc] * 0.6 : 0, t1 = len - (atParent && kp !== 37 ? radii[kp] * 0.6 : 0);
       if (t1 <= t0 + 0.5) continue;
       const half = hallTier >= 2 ? 1.45 : 1.15, steps = Math.max(2, Math.ceil((t1 - t0) / 1.0));
       rb = Math.max(born[child] ?? 0, born[parent] ?? 0); rp = 1;
@@ -76,7 +77,7 @@ export class Paths {
     // aprons under buildings (and the plaza under the hall)
     for (let i = 0; i < buildings.length; i += S) {
       const kind = buildings[i], x = buildings[i + 2], z = buildings[i + 3];
-      if (kind === 2 || kind === 21 || kind === 22 || kind === 24 || kind === 32 || kind === 33 || kind === 34) continue; // walls, fences, gates and moats have no apron
+      if (kind === 2 || kind === 21 || kind === 22 || kind === 24 || kind === 32 || kind === 33 || kind === 34 || kind === 37) continue; // walls, fences, gates and moats have no apron
       const isHall = kind === 15, R = isHall ? radii[kind] + 3.8 + hallTier * 0.8 : radii[kind] * 1.05 + 1.0, rings = 5, seg = 28;
       const base = pos.length / 3;
       vert(x, z, 0.95, 0.5, 0.5);
