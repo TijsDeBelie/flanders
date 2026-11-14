@@ -298,7 +298,7 @@ function fullReset() {
 }
 
 /** Clear every building except the town hall and build the planned model village (see modelvillage.ts). Everything goes through signed commands. */
-const MODEL_FLAT_RADIUS = 72;
+const MODEL_FLAT_RADIUS = 80;
 function runModelVillage(ask: boolean) {
   if (ask && !confirm('This clears every building except the town hall and builds a model village in its place. Continue?')) return;
   const w = lv.world;
@@ -311,9 +311,10 @@ function runModelVillage(ask: boolean) {
   afterLocalChange(); refreshTerrain(w);
   const fill = () => { if (w.cheat(3, 0, 0)) commit({ op: 'cheat', kind: 3, x: 0, y: 0 }); };
   const api: ModelApi = {
-    place(kind, x, y, rot = 0, search = 8) {
+    place(kind, x, y, rot = 0, search = 8, ok) {
       for (let r = 0; r <= search; r += 1.5) for (let k = 0; k < (r ? 8 : 1); k++) {
         const a = k * Math.PI / 4 + r, px = Math.round(x + Math.cos(a) * r), py = Math.round(y + Math.sin(a) * r);
+        if (ok && !ok(px, py)) continue;
         const st = Array.from(w.stocks()); if (defs[kind].cost.some(([res, n]) => st[res] < n)) fill();
         const i = w.place(kind, px, py, rot); if (i >= 0) { commit({ op: 'place', kind, x: px, y: py, rot }); return i; }
       }

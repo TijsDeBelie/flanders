@@ -6,7 +6,8 @@
     "wasm": "wasm-pack build ../crates/game-core --target web --release --out-dir ../../web/src/wasm",
     "dev": "vite",
     "build": "vite build",
-    "test": "node --experimental-strip-types --test tests/penshapes.test.mjs"
+    "test": "node --experimental-strip-types --test tests/penshapes.test.mjs",
+    "test:demo": "wasm-pack build ../crates/game-core --target nodejs --release --out-dir ../../web/tests/.wasm; node -e \"require('fs').writeFileSync('tests/.wasm/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node --experimental-strip-types --test tests/demo.test.mjs"
   },
   "dependencies": {
     "@fontsource/alegreya-sans": "^5.3.0",

@@ -2929,3 +2929,4 @@ node_modules/
 web/node_modules/
 web/src/wasm/
 target/
+tests/.wasm/
