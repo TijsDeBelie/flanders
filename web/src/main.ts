@@ -127,6 +127,8 @@ function applyCmd(w: World, c: Cmd) {
     case 'bridge': w.drawbridge_set(c.idx!, (c.kind ?? 0) === 1); break;
     case 'option': w.set_option(c.idx!, c.kind ?? 0, (c.x ?? 1) === 1); break;
     case 'flatten': w.flatten(c.x ?? 60); break;
+    case 'treaty': if ((c.y ?? 1) === 0) w.treaty_end(c.idx!, c.kind ?? 0); else w.treaty_set(c.idx!, c.kind ?? 0, c.x ?? 10); break;
+    case 'caravan': w.caravan_send(c.kind ?? 0, c.x ?? 0, c.idx ?? 0, c.y ?? 0, c.ax ?? 0); break;
     case 'rebuild': w.rebuild(c.idx!); break;
     case 'form': w.det_form(Uint32Array.from(c.units ?? [])); break;
     case 'march': w.det_march(c.idx!, c.x!, c.y!, !!c.to, c.ax ?? 0, c.ay ?? 0); break;

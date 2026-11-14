@@ -76,6 +76,7 @@ const EV_REPAIRED: i32 = 13;
 const EV_REBUILT: i32 = 14;
 const EV_TRADE: i32 = 15;
 const EV_COLD: i32 = 16;
+const EV_ROBBED: i32 = 17;
 /// Ticks in a day, days in a season (the interface uses the same numbers).
 pub const DAY: u64 = 240;
 pub const SEASON_DAYS: u64 = 10;
@@ -83,6 +84,17 @@ pub const SEASON_DAYS: u64 = 10;
 const GRAIN_BY_SEASON: [i32; 4] = [100, 125, 150, 25];
 /// What a unit of each resource is worth in gold coins (a merchant pays 80% of it).
 const PRICE: [i32; N_RES] = [1, 2, 2, 1, 3, 2, 5, 6, 1, 2, 1, 6];
+
+/// Goods on their way to another village (`to` is that village's tag), arriving at tick `eta`.
+#[derive(Clone)]
+pub struct Caravan { res: u8, amount: i32, to: i32, eta: u64, escort: u32 }
+/// An agreement with another village: `kind` 0 trade pact (better prices), 1 non-aggression (neither side may start a battle against the other), until tick `until`.
+#[derive(Clone)]
+pub struct Treaty { tag: i32, kind: u8, until: u64 }
+pub const TREATY_TRADE: u8 = 0;
+pub const TREATY_PEACE: u8 = 1;
+/// Ticks a caravan takes to reach a village: a minute plus the distance.
+const CARAVAN_SPEED: f32 = 1.2;
 
 #[wasm_bindgen]
 pub struct World {
@@ -98,6 +110,8 @@ pub struct World {
     sick: u32,
     children: u32, // of the population: under age
     elders: u32,   // of the population: past working age
+    caravans: Vec<Caravan>,   // goods on the road to another village
+    treaties: Vec<Treaty>,    // agreements with other villages
     warm: bool,    // false while winter fires are out for lack of wood
     eff: u32,
     jobs: u32,
@@ -162,7 +176,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -651,6 +665,7 @@ impl World {
         self.march_step();
         self.builders_step();
         self.trade_step();
+        self.caravan_step();
         for _ in 0..4 { self.fire_substep(); self.battle_substep(); }
         for i in 0..N_RES { self.flow[i] = self.stock[i] - before[i]; }
         self.staffing();
@@ -666,6 +681,7 @@ impl World {
             }
         } else { self.warm = true; }
         if self.tick % DAY != 0 { return; }
+        let now = self.tick; self.treaties.retain(|t| t.until > now);
         let take = |rng: &mut Rng, n: u32, per: u32| -> u32 { let mut k = n / per; if rng.range(per) < n % per { k += 1; } k.min(n) };
         // freezing kills the old and the young first
         if !self.warm && self.population > 3 && self.rng.range(3) == 0 {
@@ -691,6 +707,13 @@ impl World {
         self.events.extend_from_slice(&[kind, a, b, self.tick as i32]);
     }
 
+    /// Caravans on the road can be waylaid: with no escort one in a few hundred ticks is robbed; each spearman guarding it cuts that risk.
+    fn caravan_step(&mut self) {
+        let mut lost = vec![];
+        for (i, c) in self.caravans.iter().enumerate() { if c.eta > self.tick && self.tick % 10 == 0 && self.rng.range(300 + 120 * c.escort) == 0 { lost.push(i); } }
+        for &i in lost.iter().rev() { let c = self.caravans.remove(i); self.push_event(EV_ROBBED, c.amount, c.res as i32); }
+    }
+
     /// Ports sell the most plentiful stock for gold every half minute, and buy grain when the village runs short.
     pub(crate) fn trade_step(&mut self) {
         let cap = self.storage_cap();
@@ -710,12 +733,23 @@ impl World {
             let mut best: Option<(usize, i32)> = None;
             for r in 0..N_RES { if r == GD as usize { continue; } let excess = self.stock[r] - cap / 2; if excess > 0 && best.map_or(true, |(_, e)| excess > e) { best = Some((r, excess)); } }
             if let Some((r, excess)) = best {
-                let units = excess.min(30 * mult); let gold = (units * PRICE[r] * 8 / 10).max(1);
+                let units = excess.min(30 * mult); let gold = (units * self.price(r) * 8 / 10).max(1);
                 self.stock[r] -= units; self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], gold, cap);
                 self.push_event(EV_TRADE, gold, r as i32);
             }
         }
     }
+
+    /// What one unit of a resource is worth here, in coins x 100 (so 150 is one and a half coins): the usual price, higher when the stores are nearly empty, lower when they are overflowing.
+    fn price_x100(&self, r: usize) -> i32 {
+        let cap = self.storage_cap().max(1);
+        let level = self.stock[r] * 100 / cap;   // how full the store is
+        let f = if level < 5 { 180 } else if level < 15 { 130 } else if level < 50 { 100 } else if level < 80 { 80 } else { 60 };
+        PRICE[r] * f
+    }
+    fn price(&self, r: usize) -> i32 { (self.price_x100(r) / 100).max(1) }
+    /// Prices of all twelve resources now, in coins x 100.
+    pub fn prices(&self) -> Vec<i32> { (0..N_RES).map(|r| self.price_x100(r)).collect() }
 
     /// Add to a stock without ever cutting down what is already above the cap (a demolished storehouse, say).
     fn add_capped(cur: i32, add: i32, cap: i32) -> i32 { if cur >= cap { cur } else { cur.saturating_add(add).min(cap) } }
@@ -817,10 +851,51 @@ impl World {
     }
     /// Another village (tag = its id) attacks this one from `angle`.
     pub fn start_raid(&mut self, angle: f32, atk: &[u32], tag: i32) -> bool {
-        if atk.len() < 5 { return false; }
+        if atk.len() < 5 || self.has_treaty(tag, TREATY_PEACE) { return false; }
         let c = |n: u32| n.min(300);
         self.begin_battle([c(atk[0]), c(atk[1]), c(atk[2]), c(atk[3]), c(atk[4])], angle, tag)
     }
+    // ---------- trade and treaties ----------
+    /// Agree something with another village (tag) for `days` days. kind 0 trade pact, 1 non-aggression. Replaces an older agreement of the same kind.
+    pub fn treaty_set(&mut self, tag: i32, kind: u8, days: u32) -> bool {
+        if kind > 1 || tag == 0 || days == 0 || days > 120 { return false; }
+        self.treaties.retain(|t| !(t.tag == tag && t.kind == kind));
+        self.treaties.push(Treaty { tag, kind, until: self.tick + days as u64 * DAY }); true
+    }
+    /// End an agreement.
+    pub fn treaty_end(&mut self, tag: i32, kind: u8) { self.treaties.retain(|t| !(t.tag == tag && t.kind == kind)); }
+    pub fn has_treaty(&self, tag: i32, kind: u8) -> bool { self.treaties.iter().any(|t| t.tag == tag && t.kind == kind && t.until > self.tick) }
+    /// Treaties in force: [tag, kind, days left] each.
+    pub fn treaties_flat(&self) -> Vec<i32> { self.treaties.iter().filter(|t| t.until > self.tick).flat_map(|t| [t.tag, t.kind as i32, ((t.until - self.tick) / DAY) as i32]).collect() }
+
+    /// Send goods to another village (tag) over `distance` units of road, with `escort` spearmen taken from the barracks to guard them. 0 ok, -1 bad amount or resource, -2 not enough goods, -3 not enough soldiers.
+    pub fn caravan_send(&mut self, res: u8, amount: i32, to: i32, distance: f32, escort: u32) -> i32 {
+        if res as usize >= N_RES || amount <= 0 || amount > 500 || to == 0 || self.caravans.len() >= 8 || !(0.0..=3000.0).contains(&distance) { return -1; }
+        if self.stock[res as usize] < amount { return -2; }
+        if escort > self.army[0] { return -3; }
+        self.stock[res as usize] -= amount; self.army[0] -= escort;
+        self.caravans.push(Caravan { res, amount, to, eta: self.tick + 60 + (distance / CARAVAN_SPEED) as u64, escort });
+        0
+    }
+    /// Goods on the road: [resource, amount, to, ticks left, escort] each.
+    pub fn caravans_flat(&self) -> Vec<i32> { self.caravans.iter().flat_map(|c| [c.res as i32, c.amount, c.to, (c.eta.saturating_sub(self.tick)) as i32, c.escort as i32]).collect() }
+    /// Caravans that reached their destination since the last call, removed from the road: [resource, amount, to] each. The sender tells the receiving village (see `receive_goods`).
+    pub fn take_delivered(&mut self) -> Vec<i32> {
+        let mut out = vec![]; let now = self.tick;
+        let mut rest = vec![];
+        for c in std::mem::take(&mut self.caravans) { if c.eta <= now { out.extend_from_slice(&[c.res as i32, c.amount, c.to]); self.army[0] += c.escort; } else { rest.push(c); } }
+        self.caravans = rest; out
+    }
+    /// Goods arrive from another village's caravan: they go into the stores (up to what fits), and the sender is owed their worth, which we pay in coin at our own price when we can. Returns the coins paid.
+    pub fn receive_goods(&mut self, res: u8, amount: i32) -> i32 {
+        if res as usize >= N_RES || amount <= 0 { return 0; }
+        let cap = self.storage_cap(); let room = (cap - self.stock[res as usize]).max(0); let take = amount.min(room);
+        let pact = self.treaties.iter().any(|t| t.kind == TREATY_TRADE && t.until > self.tick);
+        let worth = take * self.price_x100(res as usize) / 100 * if pact { 110 } else { 100 } / 100;
+        let pay = worth.min(self.stock[GD as usize]);
+        self.stock[res as usize] += take; self.stock[GD as usize] -= pay; pay
+    }
+
     pub fn battle_active(&self) -> bool { self.battle.is_some() }
     /// Who is attacking: 0 bandits, otherwise the attacking player's tag.
     pub fn battle_tag(&self) -> i32 { self.battle.as_ref().map_or(0, |b| b.tag) }
@@ -971,7 +1046,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64);
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -1768,5 +1843,67 @@ mod family_tests {
         w.children = 15; w.elders = 5; w.staffing();
         assert!(w.efficiency() <= all, "fewer adults, no more work done");
         assert_eq!(w.adults(), 10);
+    }
+}
+
+#[cfg(test)]
+mod trade_tests {
+    use super::*;
+    fn rich() -> World { let mut w = World::new(1337, 0, 0); w.stock = [300; N_RES]; w }
+
+    #[test]
+    fn scarce_goods_cost_more_and_plenty_costs_less() {
+        let mut w = rich(); let cap = w.storage_cap();
+        w.stock[IR as usize] = 0; let scarce = w.prices()[IR as usize];
+        w.stock[IR as usize] = cap / 3; let normal = w.prices()[IR as usize];
+        w.stock[IR as usize] = cap; let glut = w.prices()[IR as usize];
+        assert!(scarce > normal && normal > glut, "{scarce} > {normal} > {glut}");
+    }
+
+    #[test]
+    fn caravans_carry_goods_between_villages_and_pay_for_them() {
+        let mut sender = rich(); let mut buyer = rich();
+        let (gold_s, iron_s) = (sender.stock[GD as usize], sender.stock[IR as usize]);
+        assert_eq!(sender.caravan_send(IR, 40, 7, 120.0, 0), 0);
+        assert_eq!(sender.stock[IR as usize], iron_s - 40, "the goods left the stores");
+        assert_eq!(sender.caravans_flat().len(), 5);
+        assert!(sender.take_delivered().is_empty(), "not there yet");
+        for _ in 0..200 { sender.step(); sender.stock[GR as usize] = 300; }
+        let d = sender.take_delivered(); assert_eq!(d, vec![IR as i32, 40, 7], "arrived after the trip");
+        let (gold_b, iron_b) = (buyer.stock[GD as usize], buyer.stock[IR as usize]);
+        let paid = buyer.receive_goods(d[0] as u8, d[1]);
+        assert_eq!(buyer.stock[IR as usize], iron_b + 40); assert_eq!(buyer.stock[GD as usize], gold_b - paid); assert!(paid > 0);
+        let _ = gold_s;
+        // limits
+        assert_eq!(sender.caravan_send(IR, 9999, 7, 10.0, 0), -1); assert_eq!(sender.caravan_send(IR, 40, 7, 10.0, 99), -3);
+        sender.stock[IR as usize] = 5; assert_eq!(sender.caravan_send(IR, 40, 7, 10.0, 0), -2);
+    }
+
+    #[test]
+    fn escorts_come_home_and_robbers_take_unescorted_goods_sometimes() {
+        let mut w = rich(); w.army[0] = 10;
+        assert_eq!(w.caravan_send(W, 20, 3, 60.0, 4), 0); assert_eq!(w.army[0], 6);
+        for _ in 0..300 { w.step(); w.stock[GR as usize] = 300; w.stock[W as usize] = 300; }
+        let _ = w.take_delivered(); assert_eq!(w.army[0], 10, "the escort returned");
+        // many unescorted caravans: some are lost on the road
+        let mut lost = 0;
+        for k in 0..40 { let mut w = rich(); w.rng = Rng(k as u64 * 7919 + 1); w.caravan_send(W, 20, 3, 400.0, 0); for _ in 0..400 { w.step(); w.stock[GR as usize] = 300; } if w.take_delivered().is_empty() { lost += 1; } }
+        assert!(lost > 0 && lost < 40, "{lost} of 40 caravans were robbed");
+    }
+
+    #[test]
+    fn treaties_stop_wars_and_improve_prices() {
+        let mut w = rich();
+        assert!(w.start_raid(0.5, &[3, 0, 0, 0, 0], 9), "no treaty: the raid starts");
+        let mut w = rich();
+        assert!(w.treaty_set(9, TREATY_PEACE, 10)); assert!(w.has_treaty(9, TREATY_PEACE));
+        assert!(!w.start_raid(0.5, &[3, 0, 0, 0, 0], 9), "a peace treaty stops their attack");
+        assert!(w.start_raid(0.5, &[3, 0, 0, 0, 0], 8), "but not someone else's");
+        assert!(!w.treaty_set(0, TREATY_PEACE, 10) && !w.treaty_set(9, 5, 10));
+        let mut w = rich(); w.stock[GD as usize] = 1000; let plain = w.receive_goods(IR, 20);
+        let mut w = rich(); w.stock[GD as usize] = 1000; w.treaty_set(9, TREATY_TRADE, 5); let pact = w.receive_goods(IR, 20);
+        assert!(pact > plain, "a trade pact pays more: {pact} > {plain}");
+        w.tick += DAY * 6; w.step();
+        assert!(!w.has_treaty(9, TREATY_TRADE), "treaties run out");
     }
 }

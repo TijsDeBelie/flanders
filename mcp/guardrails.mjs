@@ -2,7 +2,7 @@
 
 /** Calls the agent may make, with whether they change the game. Anything not listed is refused. */
 export const TOOLS = {
-  observe: { mutating: false }, catalog: { mutating: false }, buildings: { mutating: false }, probe: { mutating: false }, can_place: { mutating: false }, rivals: { mutating: false },
+  observe: { mutating: false }, catalog: { mutating: false }, buildings: { mutating: false }, probe: { mutating: false }, can_place: { mutating: false }, rivals: { mutating: false }, prices: { mutating: false },
   place: { mutating: true }, upgrade: { mutating: true }, option: { mutating: true }, demolish: { mutating: true, destructive: true }, repair: { mutating: true }, train: { mutating: true },
   garrison: { mutating: true }, drawbridge: { mutating: true }, form_army: { mutating: true }, march_army: { mutating: true }, recall_army: { mutating: true },
   attack: { mutating: true, aggressive: true },

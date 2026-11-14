@@ -67,6 +67,7 @@ tool('drawbridge', 'Raise (up: true) or lower a drawbridge.', { idx: z.number().
 tool('form_army', 'Take soldiers out of the barracks into a field army: units = [spearmen, archers, swordsmen, knights, catapults].', { units: z.array(z.number().int().min(0).max(300)).length(5) });
 tool('march_army', 'March a field army to a place (relative to the town hall).', { army_id: z.number().int().min(1), dx: z.number().int(), dy: z.number().int() });
 tool('recall_army', 'Send a field army home.', { army_id: z.number().int().min(1) });
+tool('prices', 'What each resource is worth in coins right now (scarce goods cost more).', {});
 tool('rivals', 'Other players\' villages that are online, with their positions relative to your hall.', {});
 if (guard.o.allowAttack) tool('attack', 'Attack another player\'s village with a field army. Real people play there: only with confirm_attack: true.', { key: z.string(), units: z.array(z.number().int().min(0).max(300)).length(5), confirm_attack: z.boolean() });
 server.tool('wait', 'Let the game run for a few real seconds (the agent cannot speed it up).', { seconds: z.number().min(1).max(30) }, async ({ seconds }) => { await new Promise(r => setTimeout(r, seconds * 1000)); return { content: [{ type: 'text', text: 'waited' }] }; });
