@@ -7,7 +7,7 @@ import '@fontsource/alegreya-sans/700.css';
 import './ui/style.css';
 import * as THREE from 'three';
 import init, { World, upgrade_cost_flat, village_sites, tunnels_flat } from './wasm/game_core.js';
-import { CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING } from './data';
+import { BANNER_NAMES, BANNER_STYLES, CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING } from './data';
 import { PenPreview } from './render/pen';
 import { SHAPES, isFigure, figureOutline, samplePath, snap45, rotOf, closesPath, type Shape, type P } from './penshapes';
 import { WorldShips } from './render/ships';
@@ -137,6 +137,7 @@ function applyCmd(w: World, c: Cmd) {
     case 'batch': w.place_batch(Int32Array.from(c.units ?? [])); break;   // [kind, dx, dy, rot] per piece, rebuilt once
     case 'visit': w.visit_neutral(c.idx!); break;
     case 'hero': w.hero_hire(); break;
+    case 'style': w.set_style(c.kind ?? 0); break;
     case 'goods': break;   // a notice that a caravan arrived: the receiver acts on it (see onCmd), nothing to replay
     case 'accept': w.receive_goods(c.kind ?? 0, c.x ?? 0); break;
     case 'settle': w.settle(c.kind ?? 0, c.x ?? 0, c.idx ?? 0); break;
@@ -229,6 +230,7 @@ function connect() {
     onCmd: (peerId, c) => {
       const r = rivals.get(byPeer.get(peerId) ?? ''); if (!r) return;
       r.village.advanceTo(c.tick); applyCmd(r.village.world, c);
+      if (c.op === 'style') r.village.syncFull();
       if (c.op === 'place' || c.op === 'demolish' || c.op === 'rebuild' || c.op === 'cheat' || c.op === 'upgrade' || c.op === 'flatten') refreshTerrain(r.village.world);
       r.village.syncFull(); r.village.afterTick(); r.tick = c.tick;
       if ((c.op === 'attack' || c.op === 'sendatk') && c.to === identity.pub) defendAgainst(r, c);
@@ -663,12 +665,20 @@ function refreshTerrain(w: World) {
 }
 function refreshAll() { refreshTerrain(lv.world); for (const r of rivals.values()) refreshTerrain(r.village.world); lv.syncFull(); for (const r of rivals.values()) r.village.syncFull(); }
 
+/** The banner colours in the Village pane: pick the colour your village flies. */
+function showBannerChips() {
+  const el = document.getElementById('banner-chips'); if (!el) return;
+  const cur = lv.world.style();
+  el.innerHTML = BANNER_NAMES.map((n, i) => `<button class="chip" data-banner="${i}" title="${n}" style="border:2px solid ${i === cur ? '#ffe08a' : '#6d5a38'};background:${i === 0 ? '#555' : '#' + BANNER_STYLES[i].toString(16).padStart(6, '0')};width:26px;height:26px;border-radius:50%;cursor:pointer"></button>`).join(' ');
+  el.onclick = e => { const b = (e.target as HTMLElement).closest<HTMLElement>('[data-banner]'); if (b) onAct('banner:' + b.dataset.banner); };
+}
+
 function afterLocalChange() { refreshTerrain(lv.world); lv.syncFull(); lv.afterTick(); if (forestDirtyFlag) rebuildForest(); updateSelection(); updateHud(); }
 
 function updateHud() {
   const w = lv.world;
   let barracks = -1; const f = w.buildings_flat(); for (let i = 0; i < f.length; i += 10) if (f[i] === 19) barracks = Math.max(barracks, f[i + 1]);
-  showPopulationInfo(w);
+  showPopulationInfo(w); if (!document.getElementById('banner-chips')?.firstChild) showBannerChips();
   showChoice(w, doDecide);
   ui.update({
     tick: Number(w.tick()), stocks: Array.from(w.stocks()), rates, pop: w.population(), cap: w.capacity(), sick: w.sick(),
@@ -932,6 +942,7 @@ function onAct(a: string) {
     if (code === 0) { commit({ op: 'option', idx: selectedIdx, kind: bit, x: on ? 1 : 0 }); sound.upgrade(); afterLocalChange(); } else ui.toast(code === -6 ? 'Not enough resources.' : code === -10 ? 'This building needs a better tier first.' : 'Cannot do that.', 'bad');
     return;
   }
+  if (a.startsWith('banner:')) { const n = Number(a.slice(7)); if (lv.world.set_style(n)) { commit({ op: 'style', kind: n }); lv.syncFull(); sound.click(); showBannerChips(); } return; }
   if (a === 'hero') { const code = lv.world.hero_hire(); if (code === 0) { commit({ op: 'hero' }); sound.upgrade(); afterLocalChange(); } else ui.toast(code === -6 ? 'Not enough coin (150).' : code === -4 ? 'You already have a lord.' : 'Cannot do that.', 'bad'); return; }
   if (a === 'deselect') { selectBuilding(null); return; }
   const w = lv.world;

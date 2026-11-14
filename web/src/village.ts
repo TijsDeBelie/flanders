@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { World } from './wasm/game_core.js';
 import type { Terrain } from './render/terrain';
 import { VillageView } from './render/buildings';
+import { BANNER_STYLES } from './data';
 import { Paths } from './render/paths';
 import { Walls } from './render/walls';
 import { Props } from './render/props';
@@ -25,6 +26,7 @@ export interface Shared {
 
 /** One village: its simulation plus everything that draws it. Used for your own village and for every rival replica. */
 export class Village {
+  private defaultBanner = 0;
   view: VillageView; paths: Paths; walls: Walls; props: Props; field: FieldView; bridges: BridgesView; people: People; army: ArmyView; ruins: Ruins; rivers: RiverFlow; boats: Boats;
   clear: { x: number; z: number; r: number }[] = [];
   clearLines: { ax: number; az: number; bx: number; bz: number; r: number }[] = [];
@@ -35,7 +37,7 @@ export class Village {
   fireData: Float32Array = new Float32Array(0);
 
   constructor(public world: World, public key: string, public name: string, public mine: boolean, private sh: Shared, color: number) {
-    this.view = new VillageView(color); this.paths = new Paths(sh.terrain); this.walls = new Walls(sh.terrain); this.props = new Props(sh.terrain);
+    this.defaultBanner = color; this.view = new VillageView(color); this.paths = new Paths(sh.terrain); this.walls = new Walls(sh.terrain); this.props = new Props(sh.terrain);
     this.field = new FieldView(sh.terrain, sh.forest); this.field.friend = color; this.field.obstacles = sh.obstacles; this.bridges = new BridgesView(sh.terrain); this.people = new People(sh.terrain);
     this.army = new ArmyView(sh.terrain); this.ruins = new Ruins(sh.terrain); this.rivers = new RiverFlow(sh.terrain); this.boats = new Boats(sh.terrain);
     this.army.friend = color; this.army.radii = sh.radii;
@@ -62,6 +64,7 @@ export class Village {
 
   /** Rebuild everything that depends on the building list. */
   syncFull() {
+    { const st = this.world.style(); if (st === 0) this.view.setBanner(this.defaultBanner); else this.view.setBanner(BANNER_STYLES[st]); }
     const w = this.world, f = w.buildings_flat(), roads = w.roads_flat();
     this.clear = this.view.sync(f, this.sh.radii, w.building_health(), w.options_flat());
     for (let i = 0; i < f.length; i += 10) { const k = f[i]; if (k === 24) this.clear.push({ x: f[i + 2], z: f[i + 3], r: 6.4 * (1 + 0.13 * (f[i + 4] & 7)) }); else if (k === 32 || k === 33 || k === 34) this.clear.push({ x: f[i + 2], z: f[i + 3], r: 5.6 }); }   // no trees on the banks of a moat or river or on earthworks

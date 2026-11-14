@@ -132,6 +132,7 @@ pub struct World {
     elders: u32,   // of the population: past working age
     neutral_done: Vec<bool>,      // neutral places already visited or cleared, by index into terrain::neutrals
     explored: Vec<u8>,            // fog of war: one cell per 40 units, 1 = seen
+    style: u8,                    // the colour the village flies, 0 = the default; part of the state so every peer sees it
     hero: Option<(u8, u32)>,      // the village's lord: name index and experience (level follows from it)
     defer_roads: bool,            // inside place_batch: the path network is rebuilt once at the end
     choice: Option<(u8, u64)>,   // a decision waiting for the player: kind and the tick it is made for them
@@ -207,7 +208,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, hero: None, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, style: 0, hero: None, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -597,6 +598,26 @@ impl World {
         self.buildings[idx as usize].burning = 0.0;
         self.after_change();
         0
+    }
+
+    /// Choose the colour of the village's banners and pennants (0 default, 1..=6 a palette). Free, and changeable.
+    pub fn set_style(&mut self, style: u8) -> bool { if style > 6 { return false; } self.style = style; true }
+    pub fn style(&self) -> u8 { self.style }
+
+    /// A row of buildings along a street from (ax, ay) to (bx, by), `spacing` apart, `offset` to one side or both: `sides` 0 left, 1 right, 2 both. Placed as one batch (the paths are worked out once).
+    /// Returns what `place` returns for each house, left side first. A street of houses is how a district is laid out.
+    pub fn place_row(&mut self, kind: u8, ax: i32, ay: i32, bx: i32, by: i32, spacing: u32, offset: u32, sides: u8) -> Vec<i32> {
+        let (dx, dy) = ((bx - ax) as f32, (by - ay) as f32); let len = dx.hypot(dy);
+        if len < 1.0 || spacing < 3 || offset < 2 || sides > 2 || kind as usize >= DEFS.len() { return vec![]; }
+        let (ux, uy) = (dx / len, dy / len); let n = ((len / spacing as f32).floor() as i32 + 1).min(100);
+        let rot = ((((-uy).atan2(ux) / std::f32::consts::FRAC_PI_4).round() as i32 % 8) + 8) % 8;
+        let mut items: Vec<i32> = vec![];
+        let side_list: &[f32] = match sides { 0 => &[1.0], 1 => &[-1.0], _ => &[1.0, -1.0] };
+        for &sd in side_list { for i in 0..n {
+            let t = i as f32 * spacing as f32;
+            items.extend_from_slice(&[kind as i32, (ax as f32 + ux * t - uy * offset as f32 * sd).round() as i32, (ay as f32 + uy * t + ux * offset as f32 * sd).round() as i32, rot]);
+        } }
+        self.place_batch(&items)
     }
 
     // ---------- the lord ----------
@@ -1236,7 +1257,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for a in &self.awaiting { mix(a[1] as u64); mix(a[2] as i64 as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.style as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for a in &self.awaiting { mix(a[1] as u64); mix(a[2] as i64 as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -2416,5 +2437,34 @@ mod scout_tests {
     fn a_scout_sees_further_than_an_army() {
         let (scout, army) = (run([0, 0, 0, 2, 0]), run([20, 0, 0, 0, 0]));
         assert!(scout > army, "two riders reveal more ground than a column of twenty: {scout} vs {army}");
+    }
+}
+
+#[cfg(test)]
+mod district_tests {
+    use super::*;
+    fn rich() -> World { let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0); w }
+
+    #[test]
+    fn a_street_of_houses_goes_up_on_both_sides_in_one_go() {
+        let mut w = rich();
+        let (start, hall) = (w.building_count(), 0);
+        let res = w.place_row(HOUSE, 14, -20, 14, 20, 8, 5, 2);
+        let built = res.iter().filter(|&&c| c >= 0).count();
+        assert!(res.len() >= 10, "a street of {} plots", res.len()); assert!(built >= 6, "most plots can be built ({built} of {})", res.len());
+        assert_eq!(w.building_count(), start + built as u32);
+        // both sides of the street: houses east and west of the line x = 14
+        let f = w.buildings_flat(); let xs: Vec<f32> = (1..f.len() / 10).map(|i| f[i * 10 + 2]).collect();
+        assert!(xs.iter().any(|&x| x > 14.0) && xs.iter().any(|&x| x < 14.0), "{xs:?}"); let _ = hall;
+        // the houses are linked into the path network
+        assert!(w.roads_flat().len() >= 6 * (built / 2), "paths reach the houses");
+    }
+    #[test]
+    fn bad_streets_are_refused_and_styles_are_checked() {
+        let mut w = rich();
+        assert!(w.place_row(HOUSE, 0, 0, 0, 0, 8, 5, 2).is_empty(), "no length"); assert!(w.place_row(HOUSE, 10, 0, 10, 30, 1, 5, 2).is_empty(), "too close together");
+        assert!(w.place_row(HOUSE, 10, 0, 10, 30, 8, 5, 9).is_empty(), "no such side"); assert!(w.place_row(200, 10, 0, 10, 30, 8, 5, 1).is_empty(), "no such kind");
+        assert!(w.set_style(3) && w.style() == 3); assert!(!w.set_style(9) && w.style() == 3);
+        let a = rich().state_hash(); let mut b = rich(); b.set_style(2); assert_ne!(a, b.state_hash(), "the style is part of the state");
     }
 }

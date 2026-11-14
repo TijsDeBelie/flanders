@@ -33,7 +33,10 @@ export const KIND_ICON = ['🏠', '🌾', '🧱', '🗼', '🪓', '🪚', '🪨'
 /** Kinds without a levelled pad under them (walls, fences, gates, drawbridges, moats). */
 export const NOPAD = new Set([2, 21, 22, 23, 24, 32, 33, 34]);
 /** Kinds the wall pen can draw in one stroke, and the distance between the pieces it lays. */
-export const PEN_SPACING: Record<number, number> = { 2: 6, 21: 4, 24: 4, 32: 4, 33: 4, 34: 4 };
+/** Banner colours a village can fly: style 0 is the default of the player's own village (blue) and of a neighbour's (red). */
+export const BANNER_STYLES = [0, 0x2f5fa8, 0xb03030, 0x2f8a4a, 0xc9a227, 0x7a3f9a, 0x1f1f1f];
+export const BANNER_NAMES = ['Default', 'Blue', 'Crimson', 'Green', 'Gold', 'Purple', 'Black'];
+export const PEN_SPACING: Record<number, number> = { 0: 7, 1: 14, 30: 7.2, 2: 6, 21: 4, 24: 4, 32: 4, 33: 4, 34: 4 };
 
 const GENERIC_TIERS = ['Rustic', 'Timber', 'Stone', 'Fortified'];
 export const TIER_NAMES: Record<number, string[]> = {

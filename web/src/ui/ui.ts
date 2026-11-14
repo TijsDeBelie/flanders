@@ -125,6 +125,7 @@ export class UI {
     <div class="stats"><div class="stat"><b id="s-eff">0%</b><span>Workforce</span></div><div class="stat"><b id="s-bld">0</b><span>Buildings</span></div><div class="stat"><b id="s-rad">0</b><span>Border radius</span></div></div>
     <div><div class="eyebrow">Housing used</div><div class="bar"><i id="b-house" style="width:0"></i></div></div>
     <div><div class="eyebrow">Storage (per resource)</div><div class="bar"><i id="b-store" style="width:0"></i></div><p class="muted" id="t-store"></p></div>
+    <div><h3>Banner</h3><div id="banner-chips" class="btnrow" style="gap:6px"></div></div>
     <div><h3>Neighbours</h3><ul class="log" id="peer-list"><li class="muted">Nobody else is here yet.</li></ul></div>
     <div><h3>Chronicle</h3><ul class="log" id="log"><li><small>Day 1</small> Your people have arrived. Build houses and farms, and find stone, clay, iron and gold nearby.</li></ul></div>
   </section>

@@ -4,7 +4,7 @@
 import { joinRoom } from 'trystero';
 
 export interface Cmd {
-  op: 'place' | 'upgrade' | 'demolish' | 'train' | 'attack' | 'raid' | 'refuse' | 'return' | 'cheat' | 'form' | 'march' | 'recall' | 'split' | 'merge' | 'halt' | 'sendatk' | 'repair' | 'rebuild' | 'garrison' | 'bridge' | 'option' | 'flatten' | 'treaty' | 'caravan' | 'choose' | 'visit' | 'batch' | 'goods' | 'accept' | 'settle' | 'hero';
+  op: 'place' | 'upgrade' | 'demolish' | 'train' | 'attack' | 'raid' | 'refuse' | 'return' | 'cheat' | 'form' | 'march' | 'recall' | 'split' | 'merge' | 'halt' | 'sendatk' | 'repair' | 'rebuild' | 'garrison' | 'bridge' | 'option' | 'flatten' | 'treaty' | 'caravan' | 'choose' | 'visit' | 'batch' | 'goods' | 'accept' | 'settle' | 'hero' | 'style';
   tick: number; n: number;
   kind?: number; x?: number; y?: number; rot?: number; idx?: number;
   to?: string;            // attack/refuse: pub key of the village concerned

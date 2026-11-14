@@ -930,6 +930,9 @@ export class VillageView {
   private items = new Map<number, Item>();
   get isBatched() { return this.batched; }
   constructor(private banner: number) {}
+  /** Change the colour of every banner and pennant: the buildings are rebuilt with it. */
+  setBanner(c: number) { if (c === this.banner) return; this.banner = c; for (const it of this.items.values()) this.dispose(it.group); this.items.clear(); this.touch(); }
+  get bannerColor() { return this.banner; }
 
   /** flat = World.buildings_flat() (stride 8). Returns discs [x, z, r] that should be cleared of trees. */
   sync(flat: Float32Array, radii: number[], health?: Float32Array, options?: ArrayLike<number>) {
