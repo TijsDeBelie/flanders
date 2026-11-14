@@ -76,6 +76,8 @@ export const CHOICES: { title: string; story: string; options: string[] }[] = [
   { title: 'A hard winter', story: 'The first snow has fallen and the woodpiles are low.', options: ['Buy firewood (60 coins for 80 wood)', 'Share what there is (firewood lasts twice as long, people grumble)', 'Do nothing'] },
 ];
 
+const HERO_NAME = (i: number) => ['Sir Aldric', 'Dame Isolde', 'Lord Godfrey', 'Lady Maud', 'Sir Baldwin', 'Dame Hawise', 'Lord Roland', 'Lady Eleanor', 'Sir Hugh', 'Dame Alys', 'Lord Edmund', 'Lady Cecily'][i % 12];
+
 export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; tone: 'good' | 'bad' | 'info' } => {
   switch (k) {
     case 0: return { text: `A bountiful harvest! +${a} grain.`, tone: 'good' };
@@ -94,6 +96,7 @@ export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; ton
     case 16: return { text: 'A bitter winter without firewood: someone froze to death.', tone: 'bad' };
     case 18: return { text: `${CHOICES[a]?.title ?? 'A decision'}: the village waits for your word.`, tone: 'info' };
     case 19: return { text: `You decided: ${CHOICES[a]?.options[b] ?? ''}`, tone: 'info' };
+    case 21: return b === -1 ? { text: `${HERO_NAME(a)} has fallen. You may take another lord into your service.`, tone: 'bad' } : b > 0 ? { text: `${HERO_NAME(a)} has grown into a level ${b} commander.`, tone: 'good' } : { text: `${HERO_NAME(a)} takes command of your defence.`, tone: 'good' };
     case 17: return { text: `Robbers waylaid a caravan: ${a} ${RES[b]?.name.toLowerCase() ?? 'goods'} lost.`, tone: 'bad' };
     case 15: return a >= 0 ? { text: `Merchants at your port bought ${RES[b]?.name.toLowerCase() ?? 'goods'} for ${a} gold.`, tone: 'good' } : { text: `Merchants sold you grain for ${-a} gold.`, tone: 'info' };
     case 10: return { text: `A new ${UNIT_NAMES[a] ?? 'soldier'} finished training.`, tone: 'good' };

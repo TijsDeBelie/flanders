@@ -136,6 +136,7 @@ function applyCmd(w: World, c: Cmd) {
     case 'flatten': w.flatten(c.x ?? 60); break;
     case 'batch': w.place_batch(Int32Array.from(c.units ?? [])); break;   // [kind, dx, dy, rot] per piece, rebuilt once
     case 'visit': w.visit_neutral(c.idx!); break;
+    case 'hero': w.hero_hire(); break;
     case 'goods': break;   // a notice that a caravan arrived: the receiver acts on it (see onCmd), nothing to replay
     case 'accept': w.receive_goods(c.kind ?? 0, c.x ?? 0); break;
     case 'settle': w.settle(c.kind ?? 0, c.x ?? 0, c.idx ?? 0); break;
@@ -872,6 +873,11 @@ function updateSelection() {
       <p class="muted">${d.inputs.length ? `Uses ${io(scaled(d.inputs, tier))}<br>` : ''}Makes ${io(scaled(d.outputs, tier))} every ${d.cycle}s at full staffing. Needs ${d.jobs * (tier + 1)} workers (village workforce ${w.efficiency()}%).${tier < defs[kind].maxTier ? ` Upgrading needs ${d.jobs * (tier + 2)} workers and makes ${io(scaled(d.outputs, tier + 1))}.` : ''}</p>`;
   } else if (d.housing) html += `<div class="stats"><div class="stat"><b>🏠 ${f[o + 9]} / ${d.housing * (tier + 1)}</b><span>Residents</span></div></div><p class="muted">Residents walk the village paths to their workplaces each day.</p>`;
   if (kind === 15) html += `<p class="muted">Raises storage to ${600 + 200 * tier} per resource and expands your border.</p>`;
+  if (kind === 19) {   // the lord who leads the defence
+    const h = w.hero_flat();
+    html += h.length ? `<div><h3>${w.hero_name()}</h3><div class="stats"><div class="stat"><b>Level ${h[1]}</b><span>lord</span></div><div class="stat"><b>${h[2]}${h[3] ? ' / ' + h[3] : ''}</b><span>experience</span></div></div><p class="muted">Defenders hit harder and break less easily under a lord. He learns with every defence won, and may fall in a defeat.</p></div>`
+      : `<div><h3>A lord to lead you</h3><p class="muted">A lord or lady in command makes every defender hit harder and keeps them from breaking. 150 coins.</p></div><button class="pbtn primary" data-act="hero" ${stocks[8] >= 150 ? '' : 'disabled'}>Take a lord into service</button>`;
+  }
   if (kind === 19) html += `<p class="muted">Tier ${tier + 1}: ${['spearmen and archers', '+ swordsmen', '+ knights', '+ catapults'][tier]}. Open the Army tab to recruit.</p>`;
   if (tier < defs[kind].maxTier) {
     const uc = upgrade_cost_flat(kind, tier + 1), cost: [number, number][] = []; for (let i = 0; i < uc.length; i += 2) cost.push([uc[i], uc[i + 1]]);
@@ -926,6 +932,7 @@ function onAct(a: string) {
     if (code === 0) { commit({ op: 'option', idx: selectedIdx, kind: bit, x: on ? 1 : 0 }); sound.upgrade(); afterLocalChange(); } else ui.toast(code === -6 ? 'Not enough resources.' : code === -10 ? 'This building needs a better tier first.' : 'Cannot do that.', 'bad');
     return;
   }
+  if (a === 'hero') { const code = lv.world.hero_hire(); if (code === 0) { commit({ op: 'hero' }); sound.upgrade(); afterLocalChange(); } else ui.toast(code === -6 ? 'Not enough coin (150).' : code === -4 ? 'You already have a lord.' : 'Cannot do that.', 'bad'); return; }
   if (a === 'deselect') { selectBuilding(null); return; }
   const w = lv.world;
   if (a === 'upgrade') {

@@ -82,6 +82,12 @@ const EV_CHOICE: i32 = 18;
 pub const FOG_N: i32 = 60;
 pub const FOG_CELL: f32 = 40.0;
 const EV_VISIT: i32 = 20;
+const EV_HERO: i32 = 21;
+/// Names of the lords and ladies who may take command of the village's defence.
+const HERO_NAMES: [&str; 12] = ["Sir Aldric", "Dame Isolde", "Lord Godfrey", "Lady Maud", "Sir Baldwin", "Dame Hawise", "Lord Roland", "Lady Eleanor", "Sir Hugh", "Dame Alys", "Lord Edmund", "Lady Cecily"];
+/// The lord's levels: experience needed for each.
+const HERO_XP: [u32; 5] = [0, 30, 80, 150, 250];
+const HERO_COST: i32 = 150;
 const EV_CHOSE: i32 = 19;
 /// Kinds of decision put to the player.
 pub const CH_PLAGUE: u8 = 0;
@@ -126,6 +132,7 @@ pub struct World {
     elders: u32,   // of the population: past working age
     neutral_done: Vec<bool>,      // neutral places already visited or cleared, by index into terrain::neutrals
     explored: Vec<u8>,            // fog of war: one cell per 40 units, 1 = seen
+    hero: Option<(u8, u32)>,      // the village's lord: name index and experience (level follows from it)
     defer_roads: bool,            // inside place_batch: the path network is rebuilt once at the end
     choice: Option<(u8, u64)>,   // a decision waiting for the player: kind and the tick it is made for them
     mood: i32,                   // temporary lift (or drag) on happiness from the last decision
@@ -200,7 +207,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, hero: None, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -591,6 +598,24 @@ impl World {
         self.after_change();
         0
     }
+
+    // ---------- the lord ----------
+    /// Take a lord or lady into the village's service (150 coins; needs a barracks; only one at a time). 0 ok, -4 already have one, -6 cannot afford, -11 no barracks.
+    pub fn hero_hire(&mut self) -> i32 {
+        if self.hero.is_some() { return -4; }
+        if !self.buildings.iter().any(|b| b.kind == BARRACKS) { return -11; }
+        if self.stock[GD as usize] < HERO_COST { return -6; }
+        self.stock[GD as usize] -= HERO_COST;
+        let name = (self.rng.range(HERO_NAMES.len() as u32)) as u8; self.hero = Some((name, 0)); self.push_event(EV_HERO, name as i32, 0); 0
+    }
+    /// The lord, if any: [name index, level 1..5, experience, experience for the next level (0 at the top)].
+    pub fn hero_flat(&self) -> Vec<u32> {
+        match self.hero { Some((n, xp)) => { let l = Self::hero_level(xp); vec![n as u32, l as u32, xp, if l < 5 { HERO_XP[l as usize] } else { 0 }] } None => vec![] }
+    }
+    pub fn hero_name(&self) -> String { self.hero.map_or(String::new(), |(n, _)| HERO_NAMES[n as usize % HERO_NAMES.len()].to_string()) }
+    pub(crate) fn hero_level(xp: u32) -> u8 { HERO_XP.iter().rposition(|&x| xp >= x).map_or(1, |i| i as u8 + 1) }
+    /// Defenders strike this much harder (1.0 with no lord, up to 1.24 at level 5).
+    pub(crate) fn hero_dmg(&self) -> f32 { self.hero.map_or(1.0, |(_, xp)| 1.0 + 0.06 * (Self::hero_level(xp) as f32 - 1.0) + 0.04) }
 
     /// Switch one optional design upgrade of a building on (or off again, without refund). 0 ok, -1 invalid, -6 cannot afford, -10 not available yet (needs a better tier).
     pub fn set_option(&mut self, idx: u32, bit: u8, on: bool) -> i32 {
@@ -1194,7 +1219,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for a in &self.awaiting { mix(a[1] as u64); mix(a[2] as i64 as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for a in &self.awaiting { mix(a[1] as u64); mix(a[2] as i64 as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -2252,5 +2277,51 @@ mod opening_tests {
         assert!(w.population() >= 14, "the village grew: {}", w.population());
         assert!(w.stocks()[GR as usize] > 100, "and is not starving: {} grain", w.stocks()[GR as usize]);
         assert!(w.happiness() > 20, "people are not miserable: {}", w.happiness());
+    }
+}
+
+#[cfg(test)]
+mod hero_tests {
+    use super::*;
+    fn village() -> World {
+        let mut w = World::new(1337, 0, 0); w.stock = [3000; N_RES];
+        for (k, x, y) in [(HOUSE, 12, 4), (HOUSE, -12, 6), (TOWER, 0, 16), (TOWER, 8, -16), (BARRACKS, 22, 12)] { w.place(k, x, y, 0); }
+        w
+    }
+    #[test]
+    fn a_lord_needs_a_barracks_and_coin_and_there_is_only_one() {
+        let mut w = World::new(1337, 0, 0); w.stock[GD as usize] = 500;
+        assert_eq!(w.hero_hire(), -11, "no barracks");
+        let mut w = village(); w.stock[GD as usize] = 10; assert_eq!(w.hero_hire(), -6);
+        w.stock[GD as usize] = 500; assert_eq!(w.hero_hire(), 0); assert_eq!(w.stock[GD as usize], 350);
+        assert_eq!(w.hero_hire(), -4, "one at a time");
+        let h = w.hero_flat(); assert_eq!(h[1], 1); assert!(!w.hero_name().is_empty());
+    }
+    #[test]
+    fn levels_follow_experience() {
+        assert_eq!([0, 29, 30, 79, 80, 149, 150, 249, 250, 9999].map(World::hero_level), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
+        let mut w = village(); w.hero = Some((0, 0)); let base = w.hero_dmg(); w.hero = Some((0, 250)); assert!(w.hero_dmg() > base);
+        w.hero = None; assert_eq!(w.hero_dmg(), 1.0);
+    }
+    #[test]
+    fn a_defence_wins_the_lord_experience_and_a_defeat_can_cost_his_life() {
+        let mut xp_gained = 0u32; let mut fell = 0;
+        for seed in 0..6u64 {
+            let mut w = village(); w.rng = Rng(seed * 7919 + 3); w.army = [14, 10, 8, 4, 0]; w.population = 40; w.hero = Some((2, 0));
+            assert!(w.start_raid(1.2, &[10, 3, 0, 0, 0], 0));
+            let mut n = 0; while w.battle_active() && n < 600 { w.step(); w.stock[GR as usize] = 3000; n += 1; }
+            match w.hero { Some((_, xp)) => xp_gained += xp, None => fell += 1 }
+        }
+        assert!(xp_gained > 0, "a repelled raid teaches the lord something");
+        let _ = fell;
+        // a hopeless defence: the raiders win and the lord may be lost
+        let mut lost = 0;
+        for seed in 0..24u64 {
+            let mut w = village(); w.rng = Rng(seed * 104729 + 11); w.population = 12; w.hero = Some((1, 0)); w.army = [0; 5];
+            assert!(w.start_raid(0.5, &[16, 8, 6, 0, 0], 0));
+            let mut n = 0; while w.battle_active() && n < 600 { w.step(); w.stock[GR as usize] = 3000; n += 1; }
+            if w.hero.is_none() { lost += 1; }
+        }
+        assert!(lost > 0, "in a lost battle the lord sometimes falls ({lost} of 24)");
     }
 }

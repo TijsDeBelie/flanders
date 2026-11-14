@@ -234,6 +234,7 @@ impl World {
         let mut ignites: Vec<usize> = vec![];
         let mut dmg_b: Vec<(usize, f32)> = vec![];
         let mut shots: Vec<[f32; 7]> = vec![];
+        let hero_mult = self.hero_dmg();   // the lord leads the defenders: they hit harder, and do not break so soon
         if b.rout.len() < n { b.rout.resize(n, 0.0); }
         // how many are left on each side: soldiers who see their side break lose heart
         let mut left = [0u32; 2]; for u in b.units.iter().filter(|u| u.alive) { left[u.side as usize] += 1; }
@@ -257,7 +258,7 @@ impl World {
             }
             if u.kind != 4 && u.kind != 3 && !(u.held && u.pelev > 0.0) {
                 let hpf = u.hp / ud.hp;
-                let broken = if u.side == 1 { let limit = if b.tag == 0 { 0.6 } else { 0.45 }; (ratio[1] < limit && hpf < 0.5 && self.rf() < 0.03) || (ratio[1] < 0.3 && self.rf() < 0.02) } else { ratio[0] < 0.3 && hpf < 0.4 && self.rf() < 0.02 };
+                let broken = if u.side == 1 { let limit = if b.tag == 0 { 0.6 } else { 0.45 }; (ratio[1] < limit && hpf < 0.5 && self.rf() < 0.03) || (ratio[1] < 0.3 && self.rf() < 0.02) } else { ratio[0] < if self.hero.is_some() { 0.15 } else { 0.3 } && hpf < 0.4 && self.rf() < 0.02 };
                 if broken { b.rout[i] = 7.0; continue; }
             }
             b.units[i].cd = (u.cd - dt).max(0.0);
@@ -312,7 +313,7 @@ impl World {
                         let mult = if b.units[i].charge { 1.7 } else { 1.0 };
                         b.units[i].charge = false;
                         let hit = ud.range < 5.0 || self.rf() < 0.72;
-                        if hit { Self::damage_unit(&mut b, best, ud.dmg * mult); }
+                        if hit { Self::damage_unit(&mut b, best, ud.dmg * mult * if u.side == 0 { hero_mult } else { 1.0 }); }
                         b.units[i].cd = ud.cd; b.units[i].anim = 0.35;
                         if ud.range > 5.0 { shots.push([0.0, u.x, u.y, tx, ty, 0.0, u.kind as f32]); }
                     }
@@ -466,6 +467,11 @@ impl World {
         self.report.extend([b.fled[1] as i32, b.fled[0] as i32]);   // attackers and defenders who ran away
         let ev = if won { EV_REPELLED } else { EV_RAID };
         self.push_event(ev, loot[GD as usize], b.def_dead as i32);
+        // the lord learns from a defence, and may fall in a defeat
+        if let Some((name, xp)) = self.hero {
+            if won { let gain = 10 + b.atk_dead.min(40); let before = Self::hero_level(xp); let now = xp + gain; self.hero = Some((name, now)); if Self::hero_level(now) > before { self.push_event(EV_HERO, name as i32, Self::hero_level(now) as i32); } }
+            else if self.rf() < 0.3 { self.hero = None; self.push_event(EV_HERO, name as i32, -1); }
+        }
     }
 
     /// What it costs to build the building from scratch, or a stand-in for buildings that cannot be built (the hall).
