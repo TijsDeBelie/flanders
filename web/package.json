@@ -5,7 +5,8 @@
   "scripts": {
     "wasm": "wasm-pack build ../crates/game-core --target web --release --out-dir ../../web/src/wasm",
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "node --experimental-strip-types --test tests/penshapes.test.mjs"
   },
   "dependencies": {
     "@fontsource/alegreya-sans": "^5.3.0",

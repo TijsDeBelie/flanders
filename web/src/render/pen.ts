@@ -15,7 +15,8 @@ export class PenPreview {
 
   get objects() { return [this.mesh, this.line]; }
 
-  set(pieces: { x: number; z: number; ok: boolean }[], from: { x: number; z: number }, to: { x: number; z: number }) {
+  /** `path` is the outline drawn as a line (a closed figure repeats its first point at the end). */
+  set(pieces: { x: number; z: number; ok: boolean }[], path: { x: number; z: number }[]) {
     const n = Math.min(pieces.length, this.mesh.instanceMatrix.count);
     for (let i = 0; i < n; i++) {
       const p = pieces[i]; this.m.makeTranslation(p.x, Math.max(0, this.terrain.heightAt(p.x, p.z)), p.z); this.mesh.setMatrixAt(i, this.m);
@@ -23,7 +24,7 @@ export class PenPreview {
     }
     this.mesh.count = n; this.mesh.instanceMatrix.needsUpdate = true; if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
     const y = (x: number, z: number) => Math.max(0, this.terrain.heightAt(x, z)) + 0.3;
-    this.line.geometry.setFromPoints([new THREE.Vector3(from.x, y(from.x, from.z), from.z), new THREE.Vector3(to.x, y(to.x, to.z), to.z)]); this.line.visible = true;
+    this.line.geometry.setFromPoints(path.map(q => new THREE.Vector3(q.x, y(q.x, q.z), q.z))); this.line.visible = path.length > 1;
   }
 
   clear() { this.mesh.count = 0; this.line.visible = false; }

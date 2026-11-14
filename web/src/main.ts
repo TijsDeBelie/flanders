@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import init, { World, upgrade_cost_flat, village_sites, tunnels_flat } from './wasm/game_core.js';
 import { CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING } from './data';
 import { PenPreview } from './render/pen';
+import { SHAPES, isFigure, figureOutline, samplePath, snap45, rotOf, closesPath, type Shape, type P } from './penshapes';
 import { WorldShips } from './render/ships';
 import { buildModelVillage, type ModelApi } from './modelvillage';
 import { Terrain } from './render/terrain';
@@ -73,6 +74,9 @@ let bigMap!: Minimap;
 let penPreview!: PenPreview;
 let moatWidth = 0;   // 0..7: how broad the moat you dig is (the R key changes it)
 let penStart: { x: number; z: number } | null = null;   // the wall pen: where the stroke began
+let penShape: Shape = 'line';                            // what the pen draws: a line, a path of corners, or a ready-made figure
+let penPath: P[] = [];                                   // the corners clicked so far in path mode
+let penLastClick = 0;                                    // when the last corner was clicked (a quick second click finishes the path)
 let tunnels!: Tunnels;
 let deposits!: Deposits, minimap!: Minimap, effects!: Effects, crowd!: Crowd, fx!: Effects2, wildlife!: Wildlife, shared!: Shared;
 let lv!: Village;                           // your village
@@ -707,7 +711,7 @@ function setSpeed(n: number) { if (rivals.size && [...rivals.values()].some(r =>
 
 // ---------- selection & placement ----------
 function selectKind(k: number | null) {
-  selectedKind = k; ui.markSelected(k); penStart = null; penPreview?.clear();
+  selectedKind = k; ui.markSelected(k); penReset(); drawPenBar();
   if (ghost) { scene.remove(ghost); ghost.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); const mat = m.material as THREE.Material | undefined; if (mat && m.userData.ghostMat) mat.dispose(); }); ghost = null; }
   terrain.clearPreview(); previewKey = ''; if (ghostRing) ghostRing.visible = false;
   if (k !== null) {
@@ -724,8 +728,8 @@ function selectKind(k: number | null) {
 function scaled(a: [number, number][], tier: number): [number, number][] { return a.map(([r, n]) => [r, Math.max(n, Math.floor((n * (4 + 5 * tier) + 2) / 4))]); }
 
 function placeHint(k: number) {
-  if (k === 24) return `Moat ${(1 + 0.13 * moatWidth).toFixed(1)}× wide — press R to make it thinner or broader · click for one piece, or drag to dig a run · Alt = any angle · Esc cancels`;
-  if (PEN_SPACING[k]) return `${defs[k].name} — click for one piece, or press and drag to draw a straight run · hold Alt for any angle · Esc cancels`;
+  if (k === 24) return `Moat ${(1 + 0.13 * moatWidth).toFixed(1)}× wide — press R to make it thinner or broader · ${SHAPES.find(x => x.id === penShape)?.hint ?? ''} · Alt = any angle · Esc cancels`;
+  if (PEN_SPACING[k]) return `${defs[k].name} · ${SHAPES.find(x => x.id === penShape)?.hint ?? ''} · hold Alt for any angle · Esc cancels`;
   if (k === 22) return 'Gate — click a wall piece to turn it into a gate · Esc cancels';
   if (k === 23) return 'Drawbridge — place it across a moat · R rotates · Esc cancels';
   return `${defs[k].name} — click to place · R rotates · Esc cancels`;
@@ -755,35 +759,63 @@ function gateTarget(x: number, z: number): { idx: number; x: number; z: number; 
   return { idx: best.idx, x: px, z: pz, rot: ((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8 };
 }
 
-/** The pieces a pen stroke would lay from `a` towards `b`: a straight run (square to the world unless `free`), spaced for the kind. */
-function penPieces(kind: number, a: { x: number; z: number }, b: { x: number; z: number }, free: boolean) {
-  let x1 = b.x, z1 = b.z;
-  if (!free) { if (Math.abs(x1 - a.x) >= Math.abs(z1 - a.z)) z1 = a.z; else x1 = a.x; }
-  const sp = PEN_SPACING[kind], L = Math.hypot(x1 - a.x, z1 - a.z), ux = L > 0 ? (x1 - a.x) / L : 1, uz = L > 0 ? (z1 - a.z) / L : 0;
-  const rot = kind === 24 ? moatWidth : ((Math.round(Math.atan2(-uz, ux) / (Math.PI / 4)) % 8) + 8) % 8, out: { dx: number; dy: number; x: number; z: number }[] = [], seen = new Set<string>();
-  const add = (x: number, z: number) => { const dx = Math.round(x - lv.ox), dy = Math.round(z - lv.oz), key = `${dx},${dy}`; if (!seen.has(key)) { seen.add(key); out.push({ dx, dy, x: lv.ox + dx, z: lv.oz + dy }); } };
-  for (let s = 0; s <= L + 1e-6; s += sp) add(a.x + ux * s, a.z + uz * s);
-  if (L % sp > sp * 0.4) add(x1, z1);
-  return { pieces: out, end: { x: x1, z: z1 }, rot };
+/** The pieces a pen stroke lays along an outline (corners in order, closed or not): spaced for the kind, one on every corner, each turned along the way it runs. */
+function penBuild(kind: number, pts: P[], closed: boolean) {
+  const sp = PEN_SPACING[kind], out: { dx: number; dy: number; x: number; z: number; rot: number }[] = [], seen = new Set<string>();
+  for (const q of samplePath(pts, closed, sp)) {
+    const dx = Math.round(q.x - lv.ox), dy = Math.round(q.z - lv.oz), key = `${dx},${dy}`; if (seen.has(key)) continue; seen.add(key);
+    out.push({ dx, dy, x: lv.ox + dx, z: lv.oz + dy, rot: kind === 24 ? moatWidth : rotOf(q.heading) });
+  }
+  return out;
 }
 
-function penPreviewUpdate(kind: number, a: { x: number; z: number }, b: { x: number; z: number }, free: boolean) {
-  const { pieces, end } = penPieces(kind, a, b, free), w = lv.world, stocks = Array.from(w.stocks());
+/** The outline the pen would draw right now: a straight run, the clicked corners plus the pointer, or a figure dragged out. Null when there is nothing to draw yet. */
+function penOutline(a: P | null, to: P, free: boolean): { pts: P[]; closed: boolean } | null {
+  if (penShape === 'path') {
+    if (!penPath.length) return null;
+    const last = penPath[penPath.length - 1], next = free ? to : snap45(last, to);
+    if (closesPath(penPath, to, 3.5)) return { pts: [...penPath], closed: true };
+    return { pts: [...penPath, next], closed: false };
+  }
+  if (!a) return null;
+  if (isFigure(penShape)) return { pts: figureOutline(penShape, a, to), closed: true };
+  return { pts: [a, free ? to : snap45(a, to)], closed: false };
+}
+
+function penPreviewUpdate(kind: number, o: { pts: P[]; closed: boolean }) {
+  const pieces = penBuild(kind, o.pts, o.closed).slice(0, 400), w = lv.world, stocks = Array.from(w.stocks());
   const afford = Math.min(...defs[kind].cost.map(([r, n]) => Math.floor(stocks[r] / Math.max(1, n))), 9999);
   let good = 0; const view = pieces.map((p, i) => { const ok = i < afford && w.can_place(kind, p.dx, p.dy) === 0; if (ok) good++; return { x: p.x, z: p.z, ok }; });
-  penPreview.set(view, a, end);
+  penPreview.set(view, o.closed ? [...o.pts, o.pts[0]] : o.pts);
   const cost = defs[kind].cost.map(([r, n]) => `${n * good} ${RES[r].name.toLowerCase()}`).join(', ');
-  ui.hint(`${defs[kind].name}: ${good} of ${pieces.length} pieces can be laid${good ? ' · ' + cost : ''} · release to build · Alt = any angle`, good === 0);
+  ui.hint(`${defs[kind].name}: ${good} of ${pieces.length} pieces can be laid${good ? ' · ' + cost : ''} · ${penShape === 'path' ? 'double-click or Enter to build' : 'release to build'} · Alt = any angle`, good === 0);
 }
 
-function penCommit(kind: number, a: { x: number; z: number }, b: { x: number; z: number }, free: boolean) {
-  const { pieces: all, rot } = penPieces(kind, a, b, free), pieces = all.slice(0, 400); let placed = 0, blocked = 0, broke = false;   // one stroke lays at most 400 pieces
+function penCommit(kind: number, o: { pts: P[]; closed: boolean }) {
+  const pieces = penBuild(kind, o.pts, o.closed).slice(0, 400); let placed = 0, blocked = 0, broke = false;   // one stroke lays at most 400 pieces
   // the whole stroke is one batch: the paths are worked out once at the end, and it is sent as one signed command
-  const items = pieces.flatMap(p => [kind, p.dx, p.dy, rot]), codes = lv.world.place_batch(Int32Array.from(items));
+  const items = pieces.flatMap(p => [kind, p.dx, p.dy, p.rot]), codes = lv.world.place_batch(Int32Array.from(items));
   for (const code of codes) { if (code >= 0) placed++; else if (code === -6) broke = true; else blocked++; }
   if (placed) commit({ op: 'batch', units: items });
   if (placed) { afterLocalChange(); sound.place(2); const last = pieces[pieces.length - 1]; placedFx(kind, last.x, last.z); updateHud(); }
   ui.toast(placed ? `${placed} × ${defs[kind].name.toLowerCase()} built${broke ? ' — you ran out of materials' : blocked ? ` (${blocked} blocked)` : ''}.` : broke ? 'Not enough resources.' : 'Nothing could be built there.', placed ? 'good' : 'bad');
+}
+
+/** Stop drawing: forget the corners and the preview. */
+function penReset() { penStart = null; penPath = []; penPreview?.clear(); }
+
+/** The row of drawing modes shown while a wall, fence, moat or earthwork is selected: line, path of corners, and ready-made figures. */
+function setPenShape(sh: Shape) { penShape = sh; penReset(); drawPenBar(); if (selectedKind !== null) ui.hint(placeHint(selectedKind)); }
+function drawPenBar() {
+  let bar = document.getElementById('penbar');
+  if (selectedKind === null || !PEN_SPACING[selectedKind]) { bar?.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div'); bar.id = 'penbar';
+    bar.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:50;display:flex;gap:4px;background:#1d150de6;border:1px solid #c9a24a;border-radius:8px;padding:5px 6px;box-shadow:0 4px 16px #0008';
+    bar.onclick = e => { const b = (e.target as HTMLElement).closest<HTMLElement>('[data-shape]'); if (b) setPenShape(b.dataset.shape as Shape); };
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = SHAPES.map(sh => `<button data-shape="${sh.id}" title="${sh.label}: ${sh.hint}" style="cursor:pointer;min-width:44px;padding:5px 6px;border-radius:5px;border:1px solid ${sh.id === penShape ? '#ffe08a' : '#6d5a38'};background:${sh.id === penShape ? '#7a5a22' : '#2a2014'};color:#f1e4c3;font:16px system-ui,sans-serif"><span style="display:block;font-size:20px;line-height:1">${sh.icon}</span><span style="font-size:10px">${sh.label}</span></button>`).join('');
 }
 
 function selectBuilding(i: number | null) { selectedIdx = i; if (i !== null) { selectedRuin = null; selectKind(null); ui.showSelectedTab(); } updateSelection(); }
@@ -974,18 +1006,24 @@ function updateGhost(e: { clientX: number; clientY: number }) {
 function bindInput() {
   const cv = ui.canvas;
   let down: { x: number; y: number } | null = null, hoverT = 0, routeT = 0;
-  const dropStroke = () => { down = null; penStart = null; penPreview.clear(); ui.selBox(null); };
+  const dropStroke = () => { down = null; penStart = null; if (penShape !== 'path') penPreview.clear(); ui.selBox(null); };
   cv.addEventListener('pointercancel', dropStroke); cv.addEventListener('lostpointercapture', () => { if (down) dropStroke(); });
   cv.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     down = { x: e.clientX, y: e.clientY };
     try { cv.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
-    if (!e.shiftKey && selectedKind !== null && PEN_SPACING[selectedKind]) { const h = terrain.pick(pointerRay(e).ray); penStart = h ? { x: h.x, z: h.z } : null; }
+    if (!e.shiftKey && selectedKind !== null && PEN_SPACING[selectedKind] && penShape !== 'path') { const h = terrain.pick(pointerRay(e).ray); penStart = h ? { x: h.x, z: h.z } : null; }
   });
   cv.addEventListener('pointermove', e => {
     if (down && (e.buttons & 1) && selectedKind === null && !e.shiftKey && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) ui.selBox({ x0: down.x, y0: down.y, x1: e.clientX, y1: e.clientY });
     updateGhost(e);
-    if (penStart && selectedKind !== null && (e.buttons & 1) && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8) { const h = terrain.pick(pointerRay(e).ray); if (h) { penPreviewUpdate(selectedKind, penStart, { x: h.x, z: h.z }, e.altKey); if (ghost) ghost.visible = false; if (ghostRing) ghostRing.visible = false; } }
+    if (selectedKind !== null && PEN_SPACING[selectedKind]) {   // the pen: preview a stroke being dragged, or the next stretch of a path
+      const dragging = penStart && (e.buttons & 1) && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8, walking = penShape === 'path' && penPath.length > 0 && !e.buttons;
+      if (dragging || walking) {
+        const h = terrain.pick(pointerRay(e).ray), o = h ? penOutline(penStart, { x: h.x, z: h.z }, e.altKey) : null;
+        if (o) { penPreviewUpdate(selectedKind, o); if (ghost) ghost.visible = false; if (ghostRing) ghostRing.visible = false; }
+      }
+    }
     if (selectedDet !== null && selectedKind === null && performance.now() - routeT > 140 && !e.buttons) {   // preview the route under the cursor
       routeT = performance.now(); const hit = terrain.pick(pointerRay(e).ray), u = detUnits(selectedDet), pos = lv.field.position(selectedDet);
       if (hit && u && pos) {
@@ -1010,7 +1048,16 @@ function bindInput() {
     const d0 = down, moved = Math.hypot(e.clientX - down.x, e.clientY - down.y); down = null;
     if (penStart && selectedKind !== null) {
       const a = penStart; penStart = null; penPreview.clear();
-      if (moved > 8) { const h = terrain.pick(pointerRay(e).ray); if (h) penCommit(selectedKind, a, { x: h.x, z: h.z }, e.altKey); ghostCode = 99; previewKey = ''; ui.hint(placeHint(selectedKind)); return; }
+      if (moved > 8) { const h = terrain.pick(pointerRay(e).ray), o = h ? penOutline(a, { x: h.x, z: h.z }, e.altKey) : null; if (o) penCommit(selectedKind, o); ghostCode = 99; previewKey = ''; ui.hint(placeHint(selectedKind)); return; }
+      if (isFigure(penShape)) { ui.hint('Press and drag to draw the figure', true); return; }
+    }
+    if (selectedKind !== null && PEN_SPACING[selectedKind] && penShape === 'path' && moved <= 5) {   // a click adds a corner; a quick second click, or a click on the first corner, builds
+      const h = terrain.pick(pointerRay(e).ray); if (!h) return;
+      const p = { x: h.x, z: h.z }, now = performance.now(), last = penPath[penPath.length - 1];
+      if (closesPath(penPath, p, 3.5)) { penCommit(selectedKind, { pts: [...penPath], closed: true }); penReset(); }
+      else if (last && now - penLastClick < 350 && Math.hypot(p.x - last.x, p.z - last.z) < 4) { if (penPath.length >= 2) penCommit(selectedKind, { pts: [...penPath], closed: false }); penReset(); }
+      else penPath.push(penPath.length && !e.altKey ? snap45(last, p) : p);
+      penLastClick = now; ui.hint(placeHint(selectedKind)); return;
     }
     if (moved > 5) { ui.selBox(null); if (moved > 8 && selectedKind === null && !e.shiftKey) boxSelect(d0.x, d0.y, e.clientX, e.clientY); return; }
     if (selectedKind !== null) {
@@ -1057,7 +1104,9 @@ function bindInput() {
     const n = digitOf(e);
     if (n !== null) { const kind = ui.hotkeyKind(n - 1); if (kind !== null) { ui.setTab('build'); selectKind(kind); } return; }
     switch (keys.actionOf(e)) {
-      case 'cancel': if (selectedKind !== null) selectKind(null); else if (selectedDet !== null) selectDet(null); else selectBuilding(null); break;
+      case 'penFinish': if (selectedKind !== null && penShape === 'path' && penPath.length >= 2) { e.preventDefault(); penCommit(selectedKind, { pts: [...penPath], closed: false }); penReset(); } break;
+      case 'penUndo': if (penShape === 'path' && penPath.length) { e.preventDefault(); penPath.pop(); if (!penPath.length) penPreview.clear(); } break;
+      case 'cancel': if (penPath.length) penReset(); else if (selectedKind !== null) selectKind(null); else if (selectedDet !== null) selectDet(null); else selectBuilding(null); break;
       case 'rotateBuilding': rot = (rot + 1) % 8; if (selectedKind === 24) { moatWidth = rot; ui.hint(placeHint(24)); } ghostCode = 99; previewKey = ''; break;
       case 'deposits': toggleResources(); break;
       case 'pause': e.preventDefault(); setSpeed(speed === 0 ? 1 : 0); break;
