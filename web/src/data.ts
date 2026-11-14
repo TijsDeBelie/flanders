@@ -68,6 +68,14 @@ export const DEPOSIT = [
   { name: 'Gold vein', icon: '🟡', color: '#e6b800' },
 ];
 
+/** The decisions put to the player (see World.choose): a title, a line of story and the options. */
+export const CHOICES: { title: string; story: string; options: string[] }[] = [
+  { title: 'Plague in the village', story: 'The sick lie in every street. Your reeve asks what to do.', options: ['Quarantine the sick (they stop working for 5 days; fewer die)', 'Carry on as usual'] },
+  { title: 'A travelling preacher', story: 'A preacher with a worn cloak asks leave to speak in the square.', options: ['Welcome him (20 coins; spirits rise for 10 days)', 'Turn him away'] },
+  { title: 'A noble visits', story: 'A knight with a small train asks for hospitality.', options: ['Hold a feast (100 grain, 30 coins; he leaves 90 coins)', 'Decline politely'] },
+  { title: 'A hard winter', story: 'The first snow has fallen and the woodpiles are low.', options: ['Buy firewood (60 coins for 80 wood)', 'Share what there is (firewood lasts twice as long, people grumble)', 'Do nothing'] },
+];
+
 export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; tone: 'good' | 'bad' | 'info' } => {
   switch (k) {
     case 0: return { text: `A bountiful harvest! +${a} grain.`, tone: 'good' };
@@ -84,6 +92,8 @@ export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; ton
     case 13: return { text: 'The builders finished repairing a building.', tone: 'good' };
     case 14: return { text: 'The builders raised a ruined building again.', tone: 'good' };
     case 16: return { text: 'A bitter winter without firewood: someone froze to death.', tone: 'bad' };
+    case 18: return { text: `${CHOICES[a]?.title ?? 'A decision'}: the village waits for your word.`, tone: 'info' };
+    case 19: return { text: `You decided: ${CHOICES[a]?.options[b] ?? ''}`, tone: 'info' };
     case 17: return { text: `Robbers waylaid a caravan: ${a} ${RES[b]?.name.toLowerCase() ?? 'goods'} lost.`, tone: 'bad' };
     case 15: return a >= 0 ? { text: `Merchants at your port bought ${RES[b]?.name.toLowerCase() ?? 'goods'} for ${a} gold.`, tone: 'good' } : { text: `Merchants sold you grain for ${-a} gold.`, tone: 'info' };
     case 10: return { text: `A new ${UNIT_NAMES[a] ?? 'soldier'} finished training.`, tone: 'good' };

@@ -7,7 +7,7 @@ import '@fontsource/alegreya-sans/700.css';
 import './ui/style.css';
 import * as THREE from 'three';
 import init, { World, upgrade_cost_flat, village_sites, tunnels_flat } from './wasm/game_core.js';
-import { CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING } from './data';
+import { CHOICES, CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING } from './data';
 import { PenPreview } from './render/pen';
 import { WorldShips } from './render/ships';
 import { buildModelVillage, type ModelApi } from './modelvillage';
@@ -127,6 +127,7 @@ function applyCmd(w: World, c: Cmd) {
     case 'bridge': w.drawbridge_set(c.idx!, (c.kind ?? 0) === 1); break;
     case 'option': w.set_option(c.idx!, c.kind ?? 0, (c.x ?? 1) === 1); break;
     case 'flatten': w.flatten(c.x ?? 60); break;
+    case 'choose': w.choose(c.kind ?? 0); break;
     case 'treaty': if ((c.y ?? 1) === 0) w.treaty_end(c.idx!, c.kind ?? 0); else w.treaty_set(c.idx!, c.kind ?? 0, c.x ?? 10); break;
     case 'caravan': w.caravan_send(c.kind ?? 0, c.x ?? 0, c.idx ?? 0, c.y ?? 0, c.ax ?? 0); break;
     case 'rebuild': w.rebuild(c.idx!); break;
@@ -596,12 +597,29 @@ function refreshTerrain(w: World) {
 }
 function refreshAll() { refreshTerrain(lv.world); for (const r of rivals.values()) refreshTerrain(r.village.world); lv.syncFull(); for (const r of rivals.values()) r.village.syncFull(); }
 
+/** A decision waiting for the player: a small card with one button per option. */
+let choiceKey = '';
+function showChoice(w: World) {
+  const c = w.choice_flat(), key = c.length ? `${c[0]}:${w.tick()}` : '';
+  let box = document.getElementById('choicebox');
+  if (!c.length) { if (box) box.remove(); choiceKey = ''; return; }
+  if (key === choiceKey && box) return;
+  choiceKey = key; box?.remove();
+  const def = CHOICES[c[0]]; if (!def) return;
+  box = document.createElement('div'); box.id = 'choicebox';
+  box.style.cssText = 'position:fixed;left:50%;top:90px;transform:translateX(-50%);z-index:55;max-width:460px;background:#f3e8cc;color:#2a1d10;border:2px solid #7a5a22;border-radius:6px;padding:14px 16px;font:15px Georgia,serif;box-shadow:0 8px 30px #0008';
+  box.innerHTML = `<b style="font-size:18px">${def.title}</b><p>${def.story} <i>(${c[2]} days to decide)</i></p>` + def.options.map((o, i) => `<button class="pbtn" data-opt="${i}" style="display:block;width:100%;margin:5px 0;text-align:left">${o}</button>`).join('');
+  box.onclick = e => { const b = (e.target as HTMLElement).closest<HTMLElement>('[data-opt]'); if (!b) return; const opt = Number(b.dataset.opt), code = lv.world.choose(opt); if (code === 0) { commit({ op: 'choose', kind: opt }); sound.click(); afterLocalChange(); } else ui.toast(code === -6 ? 'You cannot afford that.' : 'Cannot do that.', 'bad'); };
+  document.body.appendChild(box);
+}
+
 function afterLocalChange() { refreshTerrain(lv.world); lv.syncFull(); lv.afterTick(); if (forestDirtyFlag) rebuildForest(); updateSelection(); updateHud(); }
 
 function updateHud() {
   const w = lv.world;
   let barracks = -1; const f = w.buildings_flat(); for (let i = 0; i < f.length; i += 10) if (f[i] === 19) barracks = Math.max(barracks, f[i + 1]);
   { const d = w.demographics(), el = document.getElementById('v-pop'); if (el) el.title = `Villagers / housing. ${d[0]} children, ${d[1]} adults (they do the work), ${d[2]} elders, about ${d[3]} couples. Year ${w.year()}. Grain harvest now ${w.grain_percent()}% of usual${w.warmth() ? '' : '. It is freezing: no firewood!'}`; }
+  showChoice(w);
   ui.update({
     tick: Number(w.tick()), stocks: Array.from(w.stocks()), rates, pop: w.population(), cap: w.capacity(), sick: w.sick(),
     joy: w.happiness(), eff: w.efficiency(), jobs: w.jobs(), radius: w.build_radius(), buildings: w.building_count(), storage: w.storage(),

@@ -77,6 +77,15 @@ const EV_REBUILT: i32 = 14;
 const EV_TRADE: i32 = 15;
 const EV_COLD: i32 = 16;
 const EV_ROBBED: i32 = 17;
+const EV_CHOICE: i32 = 18;
+const EV_CHOSE: i32 = 19;
+/// Kinds of decision put to the player.
+pub const CH_PLAGUE: u8 = 0;
+pub const CH_PREACHER: u8 = 1;
+pub const CH_NOBLE: u8 = 2;
+pub const CH_WINTER: u8 = 3;
+/// Days the player has to decide before the cautious default (the last option) is taken.
+const CHOICE_DAYS: u64 = 2;
 /// Ticks in a day, days in a season (the interface uses the same numbers).
 pub const DAY: u64 = 240;
 pub const SEASON_DAYS: u64 = 10;
@@ -110,6 +119,11 @@ pub struct World {
     sick: u32,
     children: u32, // of the population: under age
     elders: u32,   // of the population: past working age
+    choice: Option<(u8, u64)>,   // a decision waiting for the player: kind and the tick it is made for them
+    mood: i32,                   // temporary lift (or drag) on happiness from the last decision
+    mood_until: u64,
+    share_until: u64,            // winter: everyone huddles together, firewood lasts twice as long
+    quarantine_until: u64,       // while quarantined, plague kills fewer and heals faster but the sick do no work
     caravans: Vec<Caravan>,   // goods on the road to another village
     treaties: Vec<Treaty>,    // agreements with other villages
     warm: bool,    // false while winter fires are out for lack of wood
@@ -176,7 +190,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -280,7 +294,7 @@ impl World {
     fn staffing(&mut self) {
         self.jobs = self.buildings.iter().map(|b| DEFS[b.kind as usize].jobs * (b.tier as u32 + 1)).sum();
         self.children = self.children.min(self.population); self.elders = self.elders.min(self.population - self.children);
-        let workers = (self.adults().saturating_sub(self.sick)) * 7 / 10;
+        let workers = (self.adults().saturating_sub(self.sick)) * 7 / 10 * if self.tick < self.quarantine_until { 7 } else { 10 } / 10;
         self.eff = if self.jobs == 0 { 100 } else { (workers * 100 / self.jobs).min(100) };
         let cap = self.capacity();
         let housed = self.population.min(cap);
@@ -631,14 +645,16 @@ impl World {
         let parks = self.buildings.iter().filter(|b| b.kind == PARK).count() as u32;
         let chapels: u32 = self.buildings.iter().filter(|b| b.kind == CHAPEL).map(|b| b.tier as u32 + 1).sum();
         if self.sick > 0 {
-            let heal = 1 + chapels;
-            let dead = (self.sick / 5).min(self.population).saturating_sub(chapels.min(self.sick / 5));
+            let q = self.tick < self.quarantine_until;
+            let heal = (1 + chapels) * if q { 2 } else { 1 };
+            let dead = (self.sick / if q { 10 } else { 5 }).min(self.population).saturating_sub(chapels.min(self.sick / 5));
             self.population = self.population.saturating_sub(dead);
             self.sick = (self.sick - dead.min(self.sick)).saturating_sub(heal);
             if self.sick == 0 { self.push_event(EV_PLAGUE_END, 0, 0); }
         } else if self.population > 15 && self.rng.range((450 + 200 * wells + 400 * chapels + 150 * parks) / if self.warm { 1 } else { 2 }) == 0 {
             self.sick = self.population / 8 + 1;
             self.push_event(EV_PLAGUE, self.sick as i32, 0);
+            self.offer(CH_PLAGUE);
         }
         self.sick = self.sick.min(self.population);
 
@@ -671,17 +687,68 @@ impl World {
         self.staffing();
     }
 
+    /// Put a decision to the player (only one at a time).
+    fn offer(&mut self, kind: u8) {
+        if self.choice.is_some() { return; }
+        self.choice = Some((kind, self.tick + CHOICE_DAYS * DAY));
+        self.push_event(EV_CHOICE, kind as i32, 0);
+    }
+    fn choice_options(&self) -> u32 { match self.choice { Some((CH_PLAGUE, _)) => 2, Some((CH_PREACHER, _)) => 2, Some((CH_NOBLE, _)) => 2, Some((CH_WINTER, _)) => 3, _ => 0 } }
+
+    /// The decision waiting for the player: [kind, number of options, days left], or empty.
+    pub fn choice_flat(&self) -> Vec<i32> { match self.choice { Some((k, due)) => vec![k as i32, self.choice_options() as i32, (due.saturating_sub(self.tick) / DAY) as i32], None => vec![] } }
+    /// What option `opt` of the waiting decision costs: [resource, amount, ...].
+    pub fn choice_cost(&self, opt: u8) -> Vec<i32> {
+        match (self.choice, opt) {
+            (Some((CH_PREACHER, _)), 0) => vec![GD as i32, 20],
+            (Some((CH_NOBLE, _)), 0) => vec![GR as i32, 100, GD as i32, 30],
+            (Some((CH_WINTER, _)), 0) => vec![GD as i32, 60],
+            _ => vec![],
+        }
+    }
+    /// Decide. 0 ok, -1 nothing to decide or no such option, -6 cannot afford it.
+    /// Plague: 0 quarantine the sick (they stop working for 5 days; fewer die, more are healed), 1 carry on.
+    /// Preacher: 0 welcome him (20 coins; spirits rise for 10 days), 1 turn him away.
+    /// Noble: 0 hold a feast (100 grain and 30 coins; he leaves 90 coins and the people are cheered), 1 decline politely.
+    /// Winter: 0 buy firewood (60 coins for 80 wood), 1 share what there is (everyone is a bit worse off but nothing is spent), 2 do nothing.
+    pub fn choose(&mut self, opt: u8) -> i32 {
+        let Some((kind, _)) = self.choice else { return -1 };
+        if opt as u32 >= self.choice_options() { return -1; }
+        let cost = self.choice_cost(opt); let mut i = 0;
+        while i + 1 < cost.len() { if self.stock[cost[i] as usize] < cost[i + 1] { return -6; } i += 2; }
+        i = 0; while i + 1 < cost.len() { self.stock[cost[i] as usize] -= cost[i + 1]; i += 2; }
+        let day = DAY; let now = self.tick;
+        match (kind, opt) {
+            (CH_PLAGUE, 0) => { self.quarantine_until = now + 5 * day; }
+            (CH_PREACHER, 0) => { self.mood = 10; self.mood_until = now + 10 * day; }
+            (CH_NOBLE, 0) => { let cap = self.storage_cap(); self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], 90, cap); self.mood = 8; self.mood_until = now + 6 * day; }
+            (CH_WINTER, 0) => { let cap = self.storage_cap(); self.stock[W as usize] = Self::add_capped(self.stock[W as usize], 80, cap); }
+            (CH_WINTER, 1) => { self.mood = -4; self.mood_until = now + 10 * day; self.warm = true; self.stock[W as usize] += 0; self.share_until = now + 10 * day; }
+            _ => {}
+        }
+        self.choice = None; self.push_event(EV_CHOSE, kind as i32, opt as i32); 0
+    }
+
     /// Fires in winter, and once a day the generations turn: children grow up, the old pass away, couples have babies.
     fn household_step(&mut self) {
         // winter: every ten ticks the village burns firewood, a tenth of a unit a head
         if self.season() == 3 {
             if self.tick % 10 == 0 {
-                let need = ((self.population + 9) / 10) as i32;
+                let need = ((self.population + 9) / 10) as i32 / if self.tick < self.share_until { 2 } else { 1 };
                 if self.stock[W as usize] >= need { self.stock[W as usize] -= need; self.warm = true; } else { self.stock[W as usize] = 0; self.warm = false; }
             }
         } else { self.warm = true; }
         if self.tick % DAY != 0 { return; }
         let now = self.tick; self.treaties.retain(|t| t.until > now);
+        // a decision falls due: the player took too long, so the cautious default is taken
+        if let Some((_, due)) = self.choice { if now >= due { let last = (self.choice_options() - 1) as u8; self.choose(last); } }
+        // visitors and hard times
+        if self.choice.is_none() {
+            let day = now / DAY;
+            if self.population > 20 && self.rng.range(40) == 0 { self.offer(CH_PREACHER); }
+            else if self.population > 30 && self.rng.range(60) == 0 { self.offer(CH_NOBLE); }
+            else if self.season() == 3 && day % (SEASON_DAYS * 4) == SEASON_DAYS * 3 { self.offer(CH_WINTER); }
+        }
         let take = |rng: &mut Rng, n: u32, per: u32| -> u32 { let mut k = n / per; if rng.range(per) < n % per { k += 1; } k.min(n) };
         // freezing kills the old and the young first
         if !self.warm && self.population > 3 && self.rng.range(3) == 0 {
@@ -1024,6 +1091,7 @@ impl World {
         if self.eff < 60 { h -= (60 - self.eff as i32) / 3; }
         if self.population > self.capacity() { h -= 10; }
         if !self.warm { h -= 12; }
+        if self.tick < self.mood_until { h += self.mood; }
         h.clamp(0, 100) as u32
     }
     /// 0 spring, 1 summer, 2 autumn, 3 winter.
@@ -1046,7 +1114,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -1827,7 +1895,7 @@ mod family_tests {
     fn children_grow_up_couples_have_babies_and_the_old_pass_on() {
         let mut w = farm_world();
         for x in [14, 20, 26, -14, -20, -26] { w.place(HOUSE, x, 6, 0); }
-        w.population = 20; w.children = 6; w.elders = 4; w.staffing();
+        w.population = 60; w.children = 20; w.elders = 10; w.staffing();
         let before = w.demographics();
         for _ in 0..(DAY * 25) { w.step(); w.stock[GR as usize] = 3000; w.stock[W as usize] = 3000; if w.battle_active() { break; } }
         let after = w.demographics();
@@ -1905,5 +1973,63 @@ mod trade_tests {
         assert!(pact > plain, "a trade pact pays more: {pact} > {plain}");
         w.tick += DAY * 6; w.step();
         assert!(!w.has_treaty(9, TREATY_TRADE), "treaties run out");
+    }
+}
+
+#[cfg(test)]
+mod choice_tests {
+    use super::*;
+    fn rich() -> World { let mut w = World::new(1337, 0, 0); w.stock = [300; N_RES]; w }
+
+    #[test]
+    fn a_decision_waits_and_the_player_can_choose() {
+        let mut w = rich(); w.offer(CH_PREACHER);
+        assert_eq!(w.choice_flat()[0], CH_PREACHER as i32);
+        w.offer(CH_NOBLE); assert_eq!(w.choice_flat()[0], CH_PREACHER as i32, "one at a time");
+        let (gold, joy) = (w.stock[GD as usize], w.happiness());
+        assert_eq!(w.choose(7), -1, "no such option");
+        assert_eq!(w.choose(0), 0);
+        assert_eq!(w.stock[GD as usize], gold - 20, "welcoming him costs coin");
+        assert!(w.happiness() > joy, "and lifts spirits");
+        assert!(w.choice_flat().is_empty() && w.choose(0) == -1);
+    }
+
+    #[test]
+    fn choices_that_cost_need_the_means_and_nobles_pay_back() {
+        let mut w = rich(); w.stock[GD as usize] = 5; w.offer(CH_NOBLE);
+        assert_eq!(w.choose(0), -6, "no coin for the feast"); assert!(!w.choice_flat().is_empty(), "still waiting");
+        w.stock[GD as usize] = 100; w.stock[GR as usize] = 200;
+        assert_eq!(w.choose(0), 0);
+        assert_eq!(w.stock[GD as usize], 100 - 30 + 90); assert_eq!(w.stock[GR as usize], 100);
+    }
+
+    #[test]
+    fn an_unanswered_decision_takes_the_cautious_default() {
+        let mut w = rich(); w.offer(CH_PREACHER); let gold = w.stock[GD as usize];
+        w.tick = DAY * 4 - 1; w.step();
+        assert!(w.choice_flat().is_empty() || w.choice_flat()[0] != CH_PREACHER as i32, "it was settled for the player");
+        assert!(w.stock[GD as usize] >= gold - 1, "the default costs nothing");
+    }
+
+    #[test]
+    fn quarantine_saves_lives_but_slows_work() {
+        let run = |quarantine: bool| {
+            let mut w = rich(); w.stock[GR as usize] = 600; w.population = 60; w.children = 0; w.elders = 0; w.sick = 30; w.staffing();
+            if quarantine { w.offer(CH_PLAGUE); assert_eq!(w.choose(0), 0); }
+            let eff = w.efficiency();
+            for _ in 0..200 { w.step(); w.stock[GR as usize] = 600; w.stock[W as usize] = 600; }
+            (w.population(), eff)
+        };
+        let (kept, _) = run(true); let (open, _) = run(false);
+        assert!(kept >= open, "quarantine keeps at least as many alive: {kept} vs {open}");
+    }
+
+    #[test]
+    fn winter_offers_firewood() {
+        let mut w = rich(); w.population = 40; w.tick = DAY * SEASON_DAYS * 3 - 1; w.stock[W as usize] = 0;
+        let mut offered = false;
+        for _ in 0..(DAY * 2) { w.step(); w.stock[GR as usize] = 300; if w.choice_flat().first() == Some(&(CH_WINTER as i32)) { offered = true; break; } }
+        assert!(offered, "the first day of winter brings a decision");
+        let wood = w.stock[W as usize]; assert_eq!(w.choose(0), 0); assert!(w.stock[W as usize] >= wood + 80 - 20);
     }
 }
