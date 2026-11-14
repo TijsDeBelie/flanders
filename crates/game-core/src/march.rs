@@ -336,7 +336,7 @@ impl World {
                     else if d.atk.is_some() { d.state = S_ARRIVED; } else { d.state = S_IDLE; }
                 }
             }
-            if !remove { let (rx, ry) = (d.x, d.y); self.reveal(rx, ry, 70.0); }   // an army on the march lifts the fog round it
+            if !remove { let (rx, ry) = (d.x, d.y); let scouts = d.units.iter().sum::<u32>() <= 4; self.reveal(rx, ry, if scouts { 120.0 } else { 70.0 }); }   // a small party travels light and sees further   // an army on the march lifts the fog round it
             if remove { self.dets.remove(i); } else { self.dets[i] = d; i += 1; }
         }
     }

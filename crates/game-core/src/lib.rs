@@ -772,6 +772,7 @@ impl World {
         self.march_step();
         self.builders_step();
         self.trade_step();
+        self.toll_step();
         self.caravan_step();
         for _ in 0..4 { self.fire_substep(); self.battle_substep(); }
         for i in 0..N_RES { self.flow[i] = self.stock[i] - before[i]; }
@@ -863,6 +864,22 @@ impl World {
 
     fn push_event(&mut self, kind: i32, a: i32, b: i32) {
         self.events.extend_from_slice(&[kind, a, b, self.tick as i32]);
+    }
+
+    /// Toll posts beside a road collect coin every twenty ticks: one coin for the post, one for each stretch of path within eight units (the traffic), up to six, times the post's tier + 1.
+    fn toll_step(&mut self) {
+        if self.tick % 20 != 0 { return; }
+        let cap = self.storage_cap();
+        let posts: Vec<(f32, f32, u32, u32)> = self.buildings.iter().filter(|b| b.kind == TOLL && b.staff > 0).map(|b| (b.x, b.y, b.tier as u32 + 1, b.staff)).collect();
+        for (x, y, mult, _) in posts {
+            let near = self.roads.iter().filter(|s| {
+                let (dx, dy) = (s[3] - s[0], s[4] - s[1]); let l2 = (dx * dx + dy * dy).max(0.0001);
+                let t = (((x - s[0]) * dx + (y - s[1]) * dy) / l2).clamp(0.0, 1.0); ((x - s[0] - dx * t).powi(2) + (y - s[1] - dy * t).powi(2)).sqrt() < 8.0
+            }).count() as u32;
+            if near == 0 { continue; }   // a toll post away from every road catches nobody
+            let coins = ((1 + near).min(6) * mult) as i32;
+            self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], coins, cap);
+        }
     }
 
     /// Caravans on the road can be waylaid: with no escort one in a few hundred ticks is robbed; each spearman guarding it cuts that risk.
@@ -2354,5 +2371,50 @@ mod oil_tests {
         let mut w = World::new(1337, 0, 0); w.stock = [3000; N_RES];
         let t = w.place(TOWER, 0, 16, 0); assert!(t >= 0); assert!(!World::has_oil(&w.buildings[t as usize]));
         w.upgrade(t as u32); assert_eq!(w.set_option(t as u32, 1, true), 0); assert!(World::has_oil(&w.buildings[t as usize]));
+    }
+}
+
+#[cfg(test)]
+mod toll_tests {
+    use super::*;
+    fn world() -> World { let mut w = World::new(1337, 0, 0); w.stock = [500; N_RES]; w.population = 40; w }
+    fn earned(w: &mut World) -> i32 { let g = w.stock[GD as usize]; w.tick = 19; w.staffing(); for _ in 0..40 { w.step(); } w.stock[GD as usize] - g }
+
+    #[test]
+    fn a_toll_post_beside_the_road_earns_and_one_in_the_wild_does_not() {
+        let mut w = world(); for (x, y) in [(12, 4), (20, 8), (28, 12)] { w.place(HOUSE, x, y, 0); }
+        let spot = [(10, 12), (14, -6), (18, 14), (24, 0), (6, 18)].into_iter().find(|&(x, y)| w.can_place(TOLL, x, y) == 0).expect("a spot");
+        assert!(w.place(TOLL, spot.0, spot.1, 0) >= 0); w.stock[GR as usize] = 3000;
+        let near = earned(&mut w); assert!(near > 0, "{near}");
+        let mut lone = world(); lone.stock[GR as usize] = 3000;
+        let far = [(55, 40), (-55, 40), (50, -45)].into_iter().find(|&(x, y)| lone.can_place(TOLL, x, y) == 0);
+        if let Some((x, y)) = far { lone.place(TOLL, x, y, 0); assert_eq!(earned(&mut lone), 0, "no road, no toll"); }
+    }
+
+    #[test]
+    fn better_toll_houses_earn_more() {
+        let mut w = world(); for (x, y) in [(12, 4), (20, 8)] { w.place(HOUSE, x, y, 0); }
+        let spot = [(10, 12), (14, -6), (18, 14), (24, 0)].into_iter().find(|&(x, y)| w.can_place(TOLL, x, y) == 0).expect("a spot");
+        let i = w.place(TOLL, spot.0, spot.1, 0) as u32; w.stock[GR as usize] = 3000;
+        let t0 = earned(&mut w); w.upgrade(i); w.stock[GR as usize] = 3000; let t1 = earned(&mut w);
+        assert!(t1 > t0, "{t1} > {t0}");
+    }
+}
+
+#[cfg(test)]
+mod scout_tests {
+    use super::*;
+    fn seen(w: &World) -> usize { w.explored_flat().iter().filter(|&&c| c != 0).count() }
+    fn run(units: [u32; 5]) -> usize {
+        let mut w = World::new(1337, 0, 0); w.stock = [500; N_RES]; w.army = units;
+        let id = w.det_form(&units); assert!(id > 0);
+        assert_eq!(w.det_march(id, 80.0, 0.0, false, 0.0, 0.0), 0);
+        for _ in 0..60 { w.step(); w.stock[GR as usize] = 500; }
+        seen(&w)
+    }
+    #[test]
+    fn a_scout_sees_further_than_an_army() {
+        let (scout, army) = (run([0, 0, 0, 2, 0]), run([20, 0, 0, 0, 0]));
+        assert!(scout > army, "two riders reveal more ground than a column of twenty: {scout} vs {army}");
     }
 }
