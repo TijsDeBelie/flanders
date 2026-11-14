@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { terrain_grid, type World } from '../wasm/game_core.js';
 import { patchWater, waterNormalTexture } from './water';
+import { groundDetailTexture, patchGround } from './groundtex';
 
 export const HALF = 1200;
 export const STEP = 2.5;
@@ -61,6 +62,7 @@ export class Terrain {
     for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (HALF * 0.4583), uv.getY(i) * (HALF * 0.4583));
     this.updateRegion(0, 0, NV - 1, NV - 1);
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: grainTexture(), roughness: 0.96, metalness: 0 });
+    patchGround(mat, groundDetailTexture());
     this.mesh = new THREE.Mesh(this.geo, mat);
     this.mesh.receiveShadow = true;
 

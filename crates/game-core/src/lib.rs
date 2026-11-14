@@ -139,7 +139,7 @@ pub struct World {
     elders: u32,   // of the population: past working age
     neutral_done: Vec<bool>,      // neutral places already visited or cleared, by index into terrain::neutrals
     explored: Vec<u8>,            // fog of war: one cell per 40 units, 1 = seen
-    style: u8,                    // the colour the village flies, 0 = the default; part of the state so every peer sees it
+    style: u32,                   // the village's flag as one number (see web/src/flag.ts), 0 = none chosen; part of the state so every peer sees it
     hero: Option<(u8, u32)>,      // the village's lord: name index and experience (level follows from it)
     defer_roads: bool,            // inside place_batch: the path network is rebuilt once at the end
     choice: Option<(u8, u64)>,   // a decision waiting for the player: kind and the tick it is made for them
@@ -713,9 +713,9 @@ impl World {
         0
     }
 
-    /// Choose the colour of the village's banners and pennants (0 default, 1..=6 a palette). Free, and changeable.
-    pub fn set_style(&mut self, style: u8) -> bool { if style > 6 { return false; } self.style = style; true }
-    pub fn style(&self) -> u8 { self.style }
+    /// Choose the village's flag: 0 for none, otherwise a packed flag number (pattern, three colours, emblem; bit 24 always set). Free, and changeable. Anything else is refused.
+    pub fn set_style(&mut self, style: u32) -> bool { if style != 0 && (style < (1 << 24) || style >= (1 << 25)) { return false; } self.style = style; true }
+    pub fn style(&self) -> u32 { self.style }
 
     /// A row of buildings along a street from (ax, ay) to (bx, by), `spacing` apart, `offset` to one side or both: `sides` 0 left, 1 right, 2 both. Placed as one batch (the paths are worked out once).
     /// Returns what `place` returns for each house, left side first. A street of houses is how a district is laid out.
@@ -2577,8 +2577,9 @@ mod district_tests {
         let mut w = rich();
         assert!(w.place_row(HOUSE, 0, 0, 0, 0, 8, 5, 2).is_empty(), "no length"); assert!(w.place_row(HOUSE, 10, 0, 10, 30, 1, 5, 2).is_empty(), "too close together");
         assert!(w.place_row(HOUSE, 10, 0, 10, 30, 8, 5, 9).is_empty(), "no such side"); assert!(w.place_row(200, 10, 0, 10, 30, 8, 5, 1).is_empty(), "no such kind");
-        assert!(w.set_style(3) && w.style() == 3); assert!(!w.set_style(9) && w.style() == 3);
-        let a = rich().state_hash(); let mut b = rich(); b.set_style(2); assert_ne!(a, b.state_hash(), "the style is part of the state");
+        let flag = (1 << 24) | 2 | (6 << 4) | (9 << 8) | (2 << 12) | (2 << 16);
+        assert!(w.set_style(flag) && w.style() == flag); assert!(!w.set_style(9) && !w.set_style(1 << 25) && w.style() == flag, "only whole flags are accepted"); assert!(w.set_style(0) && w.style() == 0);
+        let a = rich().state_hash(); let mut b = rich(); b.set_style(flag); assert_ne!(a, b.state_hash(), "the style is part of the state");
     }
 }
 

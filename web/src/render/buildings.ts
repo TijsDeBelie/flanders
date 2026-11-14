@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { packFlag, type Flag } from '../flag';
+import { flagTexture } from './flagtex';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // ---------- procedural textures & materials ----------
@@ -106,7 +108,7 @@ class B {
   spin: THREE.Object3D[] = [];
   /** Parts that swing (a drawbridge deck): kept out of the merged mesh. */
   deck: THREE.Object3D[] = [];
-  constructor(public t: number, public banner: number) {}
+  constructor(public t: number, public banner: number, public flagDesign?: Flag) {}
   /** Bake cheap ambient occlusion into vertex colours: darker near the ground and on undersides (eaves, overhangs), lighter on top. */
   private shade(geo: THREE.BufferGeometry, baseY: number) {
     if (geo.attributes.color || !geo.attributes.position) return;
@@ -203,7 +205,7 @@ class B {
   }
   flag(x: number, y: number, z: number, h = 2.2) {
     this.cyl(0.05, 0.05, h, M().darkwood, x, y, z, 6);
-    const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.7), new THREE.MeshStandardMaterial({ color: this.banner, side: THREE.DoubleSide, roughness: 0.8 }));
+    const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.7), this.flagDesign ? new THREE.MeshStandardMaterial({ map: flagTexture(this.flagDesign), side: THREE.DoubleSide, roughness: 0.8 }) : new THREE.MeshStandardMaterial({ color: this.banner, side: THREE.DoubleSide, roughness: 0.8 }));
     cloth.userData.fixed = true; this.add(cloth, x + 0.55, y + h - 0.4, z);
     this.spin.push(cloth); // waves
   }
@@ -795,8 +797,8 @@ function bake(g: THREE.Group, animated: Set<THREE.Object3D>) {
   }
 }
 
-export function buildModel(kind: number, tier: number, banner = 0x2f5fa8, seed = 0, opts = 0) {
-  const b = new B(tier, banner);
+export function buildModel(kind: number, tier: number, banner = 0x2f5fa8, seed = 0, opts = 0, flag?: Flag) {
+  const b = new B(tier, banner, flag);
   MODELS[kind](b);
   addOptions(b, kind, opts, seed);
   if (seed >= 0) applyVariant(b.g, ((seed % 4) + 4) % 4);
@@ -940,8 +942,9 @@ export class VillageView {
   private items = new Map<number, Item>();
   get isBatched() { return this.batched; }
   constructor(private banner: number) {}
-  /** Change the colour of every banner and pennant: the buildings are rebuilt with it. */
-  setBanner(c: number) { if (c === this.banner) return; this.banner = c; for (const it of this.items.values()) this.dispose(it.group); this.items.clear(); this.touch(); }
+  private flag: Flag | undefined;
+  /** Change the flag every banner flies (or go back to the plain colour with null): the buildings are rebuilt with it. */
+  setFlag(f: Flag | null, color: number) { const key = f ? packFlag(f) : 0, old = this.flag ? packFlag(this.flag) : 0; if (key === old && color === this.banner) return; this.flag = f ?? undefined; this.banner = color; for (const it of this.items.values()) this.dispose(it.group); this.items.clear(); this.touch(); }
   get bannerColor() { return this.banner; }
 
   /** flat = World.buildings_flat() (stride 8). Returns discs [x, z, r] that should be cleared of trees. */
@@ -954,7 +957,7 @@ export class VillageView {
       if (!it || it.sig !== sig) {
         if (it) this.dispose(it.group);
         // walls are drawn by the Walls renderer as one connected structure; keep an empty placeholder so indices line up
-        const g = PLAIN.has(kind) ? Object.assign(new THREE.Group(), { userData: { smoke: [], spin: [] } }) : buildModel(kind, tier, this.banner, Math.floor(Math.abs(x * 7.3 + z * 13.1)), opt);
+        const g = PLAIN.has(kind) ? Object.assign(new THREE.Group(), { userData: { smoke: [], spin: [] } }) : buildModel(kind, tier, this.banner, Math.floor(Math.abs(x * 7.3 + z * 13.1)), opt, this.flag);
         g.userData.variant = Math.floor(Math.abs(x * 7.3 + z * 13.1)) % 4;
         g.position.set(x, pad, z); g.rotation.y = rot * Math.PI / 4;
         g.userData.idx = i; g.userData.kind = kind;

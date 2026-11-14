@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { World } from './wasm/game_core.js';
 import type { Terrain } from './render/terrain';
 import { VillageView } from './render/buildings';
-import { BANNER_STYLES } from './data';
+import { unpackFlag, flagColor } from './flag';
 import { Paths } from './render/paths';
 import { Walls } from './render/walls';
 import { Spans } from './render/spans';
@@ -65,7 +65,7 @@ export class Village {
 
   /** Rebuild everything that depends on the building list. */
   syncFull() {
-    { const st = this.world.style(); if (st === 0) this.view.setBanner(this.defaultBanner); else this.view.setBanner(BANNER_STYLES[st]); }
+    { const fl = unpackFlag(this.world.style()), col = fl ? flagColor(fl) : this.defaultBanner; this.view.setFlag(fl, col); this.field.friend = col; this.army.friend = col; }
     const w = this.world, f = w.buildings_flat(), roads = w.roads_flat();
     this.clear = this.view.sync(f, this.sh.radii, w.building_health(), w.options_flat());
     for (let i = 0; i < f.length; i += 10) { const k = f[i]; if (k === 24) this.clear.push({ x: f[i + 2], z: f[i + 3], r: 6.4 * (1 + 0.13 * (f[i + 4] & 7)) }); else if (k === 32 || k === 33 || k === 34) this.clear.push({ x: f[i + 2], z: f[i + 3], r: 5.6 }); }   // no trees on the banks of a moat or river or on earthworks

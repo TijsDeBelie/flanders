@@ -1,6 +1,15 @@
 import { HALF } from '../render/terrain';
 import { CATS, KIND_ICON, RES, UNIT_ICON, defs, units, fmtCost, type BuildingDef } from '../data';
 import { ACTIONS, keys, prettyKey, type Action } from '../keys';
+import { mountFlagDesigner } from './flagdesigner';
+import { loadFlag, saveFlag } from '../flag';
+
+/** The keys bound to an action, as they are now (after any rebinding), e.g. "W / Z / ↑". */
+export const keyNames = (a: Action) => keys.binds[a].map(k => `<kbd>${prettyKey(k).toUpperCase()}</kbd>`).join(' ');
+/** What the controls are, written from the real bindings, so the home screen and the help screen can never disagree with the game. */
+export function controlsHtml() {
+  return `<b>Left-click</b> builds and selects · <b>left-drag</b> draws a box round armies · <b>right-click</b> sends the selected army there · <b>right-drag</b> turns the camera · <b>middle-drag</b> or <b>Shift-drag</b> grabs the ground · <b>wheel</b> zooms towards the pointer.<br>Move the camera: ${keyNames('panUp')} forward, ${keyNames('panLeft')} left, ${keyNames('panDown')} back, ${keyNames('panRight')} right · turn: ${keyNames('rotLeft')} ${keyNames('rotRight')} · tilt: ${keyNames('tiltUp')} ${keyNames('tiltDown')} · zoom: ${keyNames('zoomIn')} ${keyNames('zoomOut')} · cancel: ${keyNames('cancel')} · help: ${keyNames('help')}.`;
+}
 
 /** Names come from other players: never put them into HTML unescaped. */
 export const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -125,7 +134,7 @@ export class UI {
     <div class="stats"><div class="stat"><b id="s-eff">0%</b><span>Workforce</span></div><div class="stat"><b id="s-bld">0</b><span>Buildings</span></div><div class="stat"><b id="s-rad">0</b><span>Border radius</span></div></div>
     <div><div class="eyebrow">Housing used</div><div class="bar"><i id="b-house" style="width:0"></i></div></div>
     <div><div class="eyebrow">Storage (per resource)</div><div class="bar"><i id="b-store" style="width:0"></i></div><p class="muted" id="t-store"></p></div>
-    <div><h3>Banner</h3><div id="banner-chips" class="btnrow" style="gap:6px"></div></div>
+    <div><h3>Your flag</h3><div id="flag-design"></div></div>
     <div><h3>Neighbours</h3><ul class="log" id="peer-list"><li class="muted">Nobody else is here yet.</li></ul></div>
     <div><h3>Chronicle</h3><ul class="log" id="log"><li><small>Day 1</small> Your people have arrived. Build houses and farms, and find stone, clay, iron and gold nearby.</li></ul></div>
   </section>
@@ -163,16 +172,17 @@ export class UI {
     <hr>
     <div class="userfield"><div><label for="username">Your name</label><input id="username" value="${esc(name)}" maxlength="20" spellcheck="false" autocomplete="off"></div><div><label for="world">World</label><select id="world">${worldOptions(world)}</select><input id="world-custom" placeholder="Name your world" maxlength="30" spellcheck="false" autocomplete="off" hidden></div></div>
     <p class="muted">Everyone who enters the same world shares the same lands. Other players see your name over your town hall.</p>
+    <h3 style="margin:8px 0 2px">Your flag</h3><div id="intro-flag"></div>
     <div class="btnrow"><button class="pbtn primary" id="found">Enter the world</button></div>
     <p class="muted">There is no game server: every player runs a copy of the game and your browsers connect to each other. Your village is saved in this browser and keeps growing while you are away.</p>
-    <p class="muted"><b>Left-click</b> to build and select · <b>Right-drag</b> to turn · <b>Wheel</b> to zoom · <b>WASD</b> to pan.</p>
+    <p class="muted" id="home-keys"></p>
   </div>
 </div>
 <div class="overlay clear" id="help" hidden>
   <div class="sheet">
     <h2>How to rule</h2>
     <div class="keytable" id="keytable"></div>
-    <p class="muted">Mouse: <b>click</b> builds and selects · <b>right-drag</b> turns the camera · <b>shift-drag</b> or <b>middle-drag</b> pans · <b>wheel</b> zooms. Number keys <b>1-9</b> pick a building on any keyboard layout.</p>
+    <p class="muted" id="help-mouse"></p>
     <div class="btnrow"><button class="pbtn" id="keys-reset">Reset keys to default</button></div>
     <p class="muted">Feed your people, then dig for stone, clay, iron and gold. Hunters keep the larder full. Build a barracks, train soldiers and man your towers: bandits will come, and fire spreads fast through thatch. Siege engines scar the land with craters; stone and wells keep fires small.</p>
     <div class="btnrow"><button class="pbtn primary" data-close="help">Back to the realm</button></div>
@@ -210,6 +220,9 @@ export class UI {
   private bind() {
     const wsel = $('world') as HTMLSelectElement, wcus = $('world-custom') as HTMLInputElement;
     wsel.onchange = () => { wcus.hidden = wsel.value !== '__custom'; if (!wcus.hidden) wcus.focus(); };
+    mountFlagDesigner($('intro-flag'), loadFlag(), saveFlag);   // the flag is chosen here, before the village exists, and flown as soon as it does
+    const keyText = () => { $('home-keys').innerHTML = controlsHtml(); }; keyText(); keys.onChange(keyText);
+    { const h = () => { $('help-mouse').innerHTML = controlsHtml() + ' Number keys <b>1-9</b> pick a building on any keyboard layout.'; }; h(); keys.onChange(h); }
     $('found').onclick = () => { const s = (wsel.value === '__custom' ? wcus.value.trim() : wsel.value) || 'flanders', n = ($('username') as HTMLInputElement).value.replace(/[<>]/g, '').trim().slice(0, 20) || 'Traveller'; this.h.start(s, n); };
     ($('username') as HTMLInputElement).onkeydown = wcus.onkeydown = e => { if (e.key === 'Enter') $('found').click(); };
     $('tabs').onclick = e => { const t = (e.target as HTMLElement).dataset.t; if (t) this.setTab(t); };

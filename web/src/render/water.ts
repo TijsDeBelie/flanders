@@ -3,6 +3,23 @@ import * as THREE from 'three';
 /** What the water shader needs to know about the land under it: a texture of the ground height, one texel per terrain vertex. */
 export interface DepthSource { heightTex: THREE.Texture; half: number; step: number; nv: number }
 
+/** Smooth tileable value noise: a square of `size` samples, summed from layers of [cells across, amplitude, ridged]. Wraps at the edges, so it tiles without a seam. */
+export function tileableNoise(size: number, layers: readonly (readonly [number, number, boolean])[], seed = 1234567): Float32Array {
+  const h = new Float32Array(size * size); let s = seed; const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  for (const [cells, amp, ridged] of layers) {
+    const lat = new Float32Array(cells * cells); for (let i = 0; i < lat.length; i++) lat[i] = rnd();
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const fx = (x / size) * cells, fy = (y / size) * cells, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty), x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+      const a = lat[y0 % cells * cells + x0 % cells], b = lat[y0 % cells * cells + x1], c = lat[y1 * cells + x0 % cells], d = lat[y1 * cells + x1];
+      let v = a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+      if (ridged) v = 1 - Math.abs(v * 2 - 1);
+      h[y * size + x] += v * amp;
+    }
+  }
+  return h;
+}
+
 /** A seamless normal map of rippling water: four layers of smooth noise (the finer ones sharper, for glints), turned into slopes. Tiles without a seam. */
 export function waterNormalTexture(size = 512): THREE.DataTexture {
   const h = new Float32Array(size * size);

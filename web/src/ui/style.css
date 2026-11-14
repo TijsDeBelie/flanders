@@ -246,3 +246,15 @@ table.res td.r { text-align: right; }
 .optlist .pbtn.opt small { font-size: 13px; opacity: 0.85; font-family: var(--f-sans, inherit); }
 .optlist .pbtn.opt.on { background: #e6edc8; border-color: #4d6d28; }
 .optlist .pbtn.opt:disabled { opacity: 0.55; cursor: not-allowed; }
+.flagdes { display: flex; gap: 14px; align-items: flex-start; margin: 6px 0; flex-wrap: wrap; }
+.flagprev { border: 2px solid #4a3420; border-radius: 3px; box-shadow: 0 2px 8px #0005; background: #888; }
+.flagctl { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 220px; }
+.flagctl label { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 14px; }
+.flagctl select { flex: 1; max-width: 170px; font: inherit; padding: 3px 6px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.swatches span { width: 100%; font-size: 12px; opacity: 0.8; }
+.swatches button { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #3a2a18; cursor: pointer; padding: 0; }
+.swatches button.on { border-color: #fff; box-shadow: 0 0 0 2px #c9a24a; }
+.flagdice { align-self: flex-start; padding: 4px 10px; font-size: 14px; }
+#intro .sheet { max-height: 94vh; overflow-y: auto; }
+kbd { font: inherit; font-size: 0.85em; padding: 0 5px; border: 1px solid #8a7a5a; border-bottom-width: 2px; border-radius: 3px; background: #f3e8cc; color: #2a1d10; white-space: nowrap; }
