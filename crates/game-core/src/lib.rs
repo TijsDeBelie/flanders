@@ -2325,3 +2325,34 @@ mod hero_tests {
         assert!(lost > 0, "in a lost battle the lord sometimes falls ({lost} of 24)");
     }
 }
+
+#[cfg(test)]
+mod oil_tests {
+    use super::*;
+    /// An attacker standing on a ladder against the wall at (hx + 14, hy): how much health it has after a few moments.
+    fn climber_hp(oil: bool, tier: u8) -> f32 {
+        let mut w = World::new(1337, 0, 0); w.stock = [3000; N_RES]; w.army = [4, 4, 0, 0, 0]; w.population = 30;
+        let i = w.place(WALL, 14, 0, 0); assert!(i >= 0, "wall: {i}");
+        for _ in 0..tier { w.upgrade(i as u32); }
+        if oil { assert_eq!(w.set_option(i as u32, 2, true), 0, "hoarding"); }
+        assert!(w.start_raid(0.0, &[6, 0, 0, 0, 0], 0));
+        let (x, y) = (w.buildings[i as usize].x, w.buildings[i as usize].y);
+        { let b = w.battle.as_mut().unwrap(); let k = b.units.iter().position(|u| u.side == 1).unwrap(); b.units[k].x = x + 2.0; b.units[k].y = y; b.units[k].climb = 3.0; b.units[k].hp = 500.0; b.units[k].spot = 0; }
+        for _ in 0..8 { w.battle_substep(); }
+        let b = w.battle.as_ref().unwrap(); b.units.iter().find(|u| u.side == 1 && u.climb > 0.0).map_or(0.0, |u| u.hp)
+    }
+    #[test]
+    fn boiling_oil_hurts_those_on_the_ladder() {
+        let (plain, oiled) = (climber_hp(false, 2), climber_hp(true, 2));
+        assert!(oiled < plain - 15.0, "the oiled wall hurts more: {oiled} vs {plain}");
+        // a wooden wall cannot carry the hoarding (the option needs stone), so no oil
+        let mut w = World::new(1337, 0, 0); w.stock = [3000; N_RES]; let i = w.place(WALL, 14, 0, 0);
+        assert_eq!(w.set_option(i as u32, 2, true), -10);
+    }
+    #[test]
+    fn towers_and_keeps_carry_oil_too_and_it_is_off_by_default() {
+        let mut w = World::new(1337, 0, 0); w.stock = [3000; N_RES];
+        let t = w.place(TOWER, 0, 16, 0); assert!(t >= 0); assert!(!World::has_oil(&w.buildings[t as usize]));
+        w.upgrade(t as u32); assert_eq!(w.set_option(t as u32, 1, true), 0); assert!(World::has_oil(&w.buildings[t as usize]));
+    }
+}

@@ -8,6 +8,9 @@ const SUBSTEP: f32 = 0.25;
 /// What stopped an attacker: a wall, fence or gate (index into the substep's list) or water.
 enum Block { Bar(usize), Wet }
 
+/// Damage a second to a soldier on a ladder under a hoarding that pours boiling oil.
+pub const OIL_DPS: f32 = 22.0;
+
 pub fn max_hp(kind: u8, tier: u8) -> f32 {
     let base = match kind { TOWN_HALL => 1400.0, WALL => 280.0, TOWER => 520.0, FENCE => 90.0, GATE => 300.0, DRAWBRIDGE => 220.0, MOAT | RIVER | RAISE | LOWER => 100000.0, _ => DEFS[kind as usize].weight as f32 * 90.0 + 130.0 };
     base * (1.0 + tier as f32 * 0.8)
@@ -107,6 +110,9 @@ impl World {
         self.push_event(EV_BATTLE, atk.iter().sum::<u32>() as i32, tag);
         true
     }
+
+    /// Does this building have a hoarding (a timber gallery with murder holes) to pour boiling oil from? Stone walls (option 2), towers and keeps (option 1).
+    pub(crate) fn has_oil(w: &Building) -> bool { match w.kind { WALL => w.tier >= 2 && w.opts & 4 != 0, TOWER | KEEP => w.opts & 2 != 0, _ => false } }
 
     fn damage_unit(b: &mut Battle, j: usize, dmg: f32) {
         let armor = UNITS[b.units[j].kind as usize].armor;
@@ -265,6 +271,8 @@ impl World {
             b.units[i].anim = (b.units[i].anim - dt).max(0.0);
             if u.climb > 0.0 {   // up the ladder and over the wall
                 b.units[i].climb -= dt;
+                // boiling oil: a wall or tower with a hoarding pours it on whoever is on a ladder against it
+                if self.buildings.iter().any(|w| w.hp > 0.0 && Self::has_oil(w) && (w.x - u.x).powi(2) + (w.y - u.y).powi(2) < (DEFS[w.kind as usize].r + 3.2).powi(2)) { Self::damage_unit(&mut b, i, OIL_DPS * dt); if !b.units[i].alive { continue; } }
                 if b.units[i].climb <= 0.0 {
                     b.units[i].spot = -1;
                     let mut near: Option<(f32, f32, f32, f32)> = None;
