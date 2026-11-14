@@ -599,6 +599,7 @@ function afterLocalChange() { refreshTerrain(lv.world); lv.syncFull(); lv.afterT
 function updateHud() {
   const w = lv.world;
   let barracks = -1; const f = w.buildings_flat(); for (let i = 0; i < f.length; i += 10) if (f[i] === 19) barracks = Math.max(barracks, f[i + 1]);
+  { const d = w.demographics(), el = document.getElementById('v-pop'); if (el) el.title = `Villagers / housing. ${d[0]} children, ${d[1]} adults (they do the work), ${d[2]} elders, about ${d[3]} couples. Year ${w.year()}. Grain harvest now ${w.grain_percent()}% of usual${w.warmth() ? '' : '. It is freezing: no firewood!'}`; }
   ui.update({
     tick: Number(w.tick()), stocks: Array.from(w.stocks()), rates, pop: w.population(), cap: w.capacity(), sick: w.sick(),
     joy: w.happiness(), eff: w.efficiency(), jobs: w.jobs(), radius: w.build_radius(), buildings: w.building_count(), storage: w.storage(),

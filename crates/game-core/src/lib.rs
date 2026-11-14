@@ -75,6 +75,12 @@ const EV_NEEDMAT: i32 = 12;
 const EV_REPAIRED: i32 = 13;
 const EV_REBUILT: i32 = 14;
 const EV_TRADE: i32 = 15;
+const EV_COLD: i32 = 16;
+/// Ticks in a day, days in a season (the interface uses the same numbers).
+pub const DAY: u64 = 240;
+pub const SEASON_DAYS: u64 = 10;
+/// Grain harvest by season in percent: spring sowing, summer growth, a big autumn harvest, a barren winter.
+const GRAIN_BY_SEASON: [i32; 4] = [100, 125, 150, 25];
 /// What a unit of each resource is worth in gold coins (a merchant pays 80% of it).
 const PRICE: [i32; N_RES] = [1, 2, 2, 1, 3, 2, 5, 6, 1, 2, 1, 6];
 
@@ -90,6 +96,9 @@ pub struct World {
     stock: [i32; N_RES],
     population: u32,
     sick: u32,
+    children: u32, // of the population: under age
+    elders: u32,   // of the population: past working age
+    warm: bool,    // false while winter fires are out for lack of wood
     eff: u32,
     jobs: u32,
     events: Vec<i32>,
@@ -153,7 +162,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -256,7 +265,8 @@ impl World {
     /// Workforce efficiency, and how villagers are spread over workplaces and homes.
     fn staffing(&mut self) {
         self.jobs = self.buildings.iter().map(|b| DEFS[b.kind as usize].jobs * (b.tier as u32 + 1)).sum();
-        let workers = (self.population.saturating_sub(self.sick)) * 7 / 10;
+        self.children = self.children.min(self.population); self.elders = self.elders.min(self.population - self.children);
+        let workers = (self.adults().saturating_sub(self.sick)) * 7 / 10;
         self.eff = if self.jobs == 0 { 100 } else { (workers * 100 / self.jobs).min(100) };
         let cap = self.capacity();
         let housed = self.population.min(cap);
@@ -544,6 +554,8 @@ impl World {
             let mut p = self.buildings[i].progress + self.eff;
             let mult = 4 + 5 * tier as i32;   // better buildings employ more people and make more: x1, x2.25, x3.5, x4.75
             let scale = |n: i32| ((n * mult + 2) / 4).max(n);
+            let season = self.season();
+            let yield_of = |r: u8, n: i32| { let q = scale(n); if r == GR { (q * GRAIN_BY_SEASON[season as usize] / 100).max(1) } else { q } };
             let mut status = self.buildings[i].status;
             while p >= need {
                 // requirement checks
@@ -560,11 +572,11 @@ impl World {
                     }
                 }
                 if d.inputs.iter().any(|&(r, n)| self.stock[r as usize] < scale(n)) { status = 1; p = need; break; }
-                if d.outputs.iter().any(|&(r, n)| self.stock[r as usize] + scale(n) > cap) { status = 3; p = need; break; }
+                if d.outputs.iter().any(|&(r, n)| self.stock[r as usize] + yield_of(r, n) > cap) { status = 3; p = need; break; }
                 for &(r, n) in d.inputs { self.stock[r as usize] -= scale(n); }
-                for &(r, n) in d.outputs { self.stock[r as usize] += scale(n); }
+                for &(r, n) in d.outputs { self.stock[r as usize] += yield_of(r, n); }
                 if let Some(di) = dep_idx {
-                    let out: i32 = d.outputs.iter().map(|&(_, n)| scale(n)).sum();
+                    let out: i32 = d.outputs.iter().map(|&(_, n)| scale(n)).sum();   // ore taken from the ground does not depend on the season
                     self.deposits[di].rem = (self.deposits[di].rem - out).max(0);
                 }
                 status = 0;
@@ -597,6 +609,9 @@ impl World {
         // tax
         if self.tick % 10 == 0 { self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], ((self.population as i32 / 10).max(1) * (50 + self.happiness() as i32) / 100).max(1), cap); }
 
+        // seasons, warmth and the generations
+        self.household_step();
+
         // disease
         let wells = self.buildings.iter().filter(|b| b.kind == WELL).count() as u32;
         let parks = self.buildings.iter().filter(|b| b.kind == PARK).count() as u32;
@@ -607,7 +622,7 @@ impl World {
             self.population = self.population.saturating_sub(dead);
             self.sick = (self.sick - dead.min(self.sick)).saturating_sub(heal);
             if self.sick == 0 { self.push_event(EV_PLAGUE_END, 0, 0); }
-        } else if self.population > 15 && self.rng.range(450 + 200 * wells + 400 * chapels + 150 * parks) == 0 {
+        } else if self.population > 15 && self.rng.range((450 + 200 * wells + 400 * chapels + 150 * parks) / if self.warm { 1 } else { 2 }) == 0 {
             self.sick = self.population / 8 + 1;
             self.push_event(EV_PLAGUE, self.sick as i32, 0);
         }
@@ -638,6 +653,34 @@ impl World {
         self.trade_step();
         for _ in 0..4 { self.fire_substep(); self.battle_substep(); }
         for i in 0..N_RES { self.flow[i] = self.stock[i] - before[i]; }
+        self.staffing();
+    }
+
+    /// Fires in winter, and once a day the generations turn: children grow up, the old pass away, couples have babies.
+    fn household_step(&mut self) {
+        // winter: every ten ticks the village burns firewood, a tenth of a unit a head
+        if self.season() == 3 {
+            if self.tick % 10 == 0 {
+                let need = ((self.population + 9) / 10) as i32;
+                if self.stock[W as usize] >= need { self.stock[W as usize] -= need; self.warm = true; } else { self.stock[W as usize] = 0; self.warm = false; }
+            }
+        } else { self.warm = true; }
+        if self.tick % DAY != 0 { return; }
+        let take = |rng: &mut Rng, n: u32, per: u32| -> u32 { let mut k = n / per; if rng.range(per) < n % per { k += 1; } k.min(n) };
+        // freezing kills the old and the young first
+        if !self.warm && self.population > 3 && self.rng.range(3) == 0 {
+            if self.elders > 0 { self.elders -= 1; } else if self.children > 0 { self.children -= 1; }
+            self.population -= 1; self.push_event(EV_COLD, 1, 0);
+        }
+        let grown = take(&mut self.rng, self.children, 30); self.children -= grown;
+        let adults = self.adults(); let aged = take(&mut self.rng, adults, 90); self.elders += aged;
+        let died = take(&mut self.rng, self.elders, 25).min(self.population.saturating_sub(2));
+        self.elders -= died.min(self.elders); self.population -= died;
+        if self.stock[GR as usize] >= 10 && self.happiness() >= 40 && self.population < self.capacity() {
+            let couples = self.adults() / 2; let room = self.capacity() - self.population;
+            let born = take(&mut self.rng, couples, 14).min(room);
+            self.population += born; self.children += born;
+        }
         self.staffing();
     }
 
@@ -905,8 +948,21 @@ impl World {
         if self.population > 0 { h -= (self.sick as i32 * 40) / self.population as i32; }
         if self.eff < 60 { h -= (60 - self.eff as i32) / 3; }
         if self.population > self.capacity() { h -= 10; }
+        if !self.warm { h -= 12; }
         h.clamp(0, 100) as u32
     }
+    /// 0 spring, 1 summer, 2 autumn, 3 winter.
+    pub fn season(&self) -> u8 { ((self.tick / DAY / SEASON_DAYS) % 4) as u8 }
+    /// Which year it is (a year is four seasons), from 1.
+    pub fn year(&self) -> u32 { (self.tick / DAY / SEASON_DAYS / 4) as u32 + 1 }
+    /// Grain harvest now as a percentage of the usual (the season decides).
+    pub fn grain_percent(&self) -> u32 { GRAIN_BY_SEASON[self.season() as usize] as u32 }
+    /// Villagers of working age.
+    pub fn adults(&self) -> u32 { self.population.saturating_sub(self.children + self.elders) }
+    /// [children, adults, elders, couples]: the families behind the headcount.
+    pub fn demographics(&self) -> Vec<u32> { vec![self.children, self.adults(), self.elders, self.adults() / 2] }
+    /// False while it is winter and the village has no wood to burn: people freeze.
+    pub fn warmth(&self) -> bool { self.warm }
     pub fn jobs(&self) -> u32 { self.jobs }
     pub fn building_count(&self) -> u32 { self.buildings.len() as u32 }
     pub fn take_events(&mut self) -> Vec<i32> { std::mem::take(&mut self.events) }
@@ -915,7 +971,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64);
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64);
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -1657,5 +1713,60 @@ mod perf_tests {
         for i in 0..50 { let a = i as f32 * 0.7; let r = 28.0 + (i % 5) as f32 * 3.0; if w.place(HOUSE, (a.cos() * r).round() as i32, (a.sin() * r).round() as i32, 0) >= 0 { n += 1; } }
         println!("placed {n} in {:?}, roads {}", t.elapsed(), w.roads.len());
         assert!(t.elapsed().as_secs_f32() < 8.0);
+    }
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::*;
+
+    fn farm_world() -> World { let mut w = World::new(1337, 0, 0); w.stock = [3000; N_RES]; w.cheat(3, 0, 0); w }
+
+    #[test]
+    fn seasons_turn_every_ten_days_and_farms_follow() {
+        let mut w = farm_world();
+        assert_eq!(w.season(), 0);
+        w.tick = DAY * SEASON_DAYS * 2; assert_eq!(w.season(), 2); assert_eq!(w.grain_percent(), 150);
+        w.tick = DAY * SEASON_DAYS * 3; assert_eq!(w.season(), 3); assert_eq!(w.grain_percent(), 25);
+        w.tick = DAY * SEASON_DAYS * 4; assert_eq!((w.season(), w.year()), (0, 2));
+        // the same farm makes more grain in autumn than in winter
+        let make = |tick: u64| { let mut w = farm_world(); let i = [(-20, 14), (20, 14), (30, -20), (-30, -20)].into_iter().map(|(x, y)| w.place(FARM, x, y, 0)).find(|&i| i >= 0).expect("a farm site"); w.tick = tick; w.stock[GR as usize] = 0; w.population = 40; w.staffing(); for _ in 0..40 { w.step(); w.stock[W as usize] = 3000; w.stock[GR as usize] = w.stock[GR as usize].min(500); } let _ = i; w.stock[GR as usize] };
+        let (autumn, winter) = (make(DAY * SEASON_DAYS * 2), make(DAY * SEASON_DAYS * 3));
+        assert!(autumn > winter, "autumn {autumn} vs winter {winter}");
+    }
+
+    #[test]
+    fn winter_burns_wood_and_a_cold_village_suffers() {
+        let mut w = farm_world(); w.tick = DAY * SEASON_DAYS * 3;
+        w.population = 40; w.stock[W as usize] = 100;
+        for _ in 0..10 { w.step(); w.stock[GR as usize] = 3000; }
+        assert!(w.stock[W as usize] < 100, "firewood was burned");
+        assert!(w.warmth());
+        w.stock[W as usize] = 0; let h0 = { w.warm = true; w.happiness() };
+        for _ in 0..20 { w.step(); w.stock[W as usize] = 0; w.stock[GR as usize] = 3000; }
+        assert!(!w.warmth(), "no wood, no warmth");
+        assert!(w.happiness() < h0, "{} < {h0}", w.happiness());
+    }
+
+    #[test]
+    fn children_grow_up_couples_have_babies_and_the_old_pass_on() {
+        let mut w = farm_world();
+        for x in [14, 20, 26, -14, -20, -26] { w.place(HOUSE, x, 6, 0); }
+        w.population = 20; w.children = 6; w.elders = 4; w.staffing();
+        let before = w.demographics();
+        for _ in 0..(DAY * 25) { w.step(); w.stock[GR as usize] = 3000; w.stock[W as usize] = 3000; if w.battle_active() { break; } }
+        let after = w.demographics();
+        assert_eq!(after[0] + after[1] + after[2], w.population(), "the cohorts add up to the headcount");
+        assert!(after[2] != before[2] || after[0] != before[0], "ages moved: {before:?} -> {after:?}");
+    }
+
+    #[test]
+    fn only_adults_work() {
+        let mut w = farm_world();
+        w.place(FARM, 20, 14, 0); w.place(FARM, -20, 14, 0); w.place(HOUSE, 12, 4, 0);
+        w.population = 30; w.children = 0; w.elders = 0; w.staffing(); let all = w.efficiency();
+        w.children = 15; w.elders = 5; w.staffing();
+        assert!(w.efficiency() <= all, "fewer adults, no more work done");
+        assert_eq!(w.adults(), 10);
     }
 }

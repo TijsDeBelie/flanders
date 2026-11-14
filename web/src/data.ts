@@ -83,6 +83,7 @@ export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; ton
     case 11: return { text: 'Villagers put out the fire with water from the well.', tone: 'good' };
     case 13: return { text: 'The builders finished repairing a building.', tone: 'good' };
     case 14: return { text: 'The builders raised a ruined building again.', tone: 'good' };
+    case 16: return { text: 'A bitter winter without firewood: someone froze to death.', tone: 'bad' };
     case 15: return a >= 0 ? { text: `Merchants at your port bought ${RES[b]?.name.toLowerCase() ?? 'goods'} for ${a} gold.`, tone: 'good' } : { text: `Merchants sold you grain for ${-a} gold.`, tone: 'info' };
     case 10: return { text: `A new ${UNIT_NAMES[a] ?? 'soldier'} finished training.`, tone: 'good' };
     default: return { text: 'Something happened.', tone: 'info' };
