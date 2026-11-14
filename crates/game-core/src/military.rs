@@ -73,6 +73,10 @@ pub struct Battle {
     pub spots: Vec<[f32; 4]>,   // ladders standing against walls: x, y, angle, busy
     pub sites: Vec<[f32; 4]>,   // moat crossings being built: x, y, angle, work done
     pub bridges: Vec<[f32; 3]>, // finished crossings: x, y, angle
+    pub rout: Vec<f32>,         // per unit: seconds left running away (0 = holding)
+    pub start_side: [u32; 2],   // soldiers each side began with
+    pub fled: [u32; 2],         // soldiers who ran off the field alive
+    pub fled_kinds: [u32; 5],   // which attackers got away
 }
 
 #[derive(Clone, Copy)]

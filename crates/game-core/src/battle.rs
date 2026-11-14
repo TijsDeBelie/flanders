@@ -102,7 +102,8 @@ impl World {
             }
         }
         let ladders = if atk[0] + atk[2] > 0 { ((atk[0] + atk[2]) / 4).max(1) } else { 0 };
-        self.battle = Some(Battle { ladders, ladders_used: 0, spots: vec![], sites: vec![], bridges: vec![], units, t: 0.0, pillage: 0.0, tag, atk_start: atk, atk_dead: 0, def_dead: 0, militia_dead: 0, bld_lost: 0 });
+        self.battle = Some(Battle { ladders, ladders_used: 0, spots: vec![], sites: vec![], bridges: vec![], units, t: 0.0, pillage: 0.0, tag, atk_start: atk, atk_dead: 0, def_dead: 0, militia_dead: 0, bld_lost: 0, rout: vec![], start_side: [0, 0], fled: [0, 0], fled_kinds: [0; 5] });
+        if let Some(b) = self.battle.as_mut() { for u in &b.units { b.start_side[u.side as usize] += 1; } }
         self.push_event(EV_BATTLE, atk.iter().sum::<u32>() as i32, tag);
         true
     }
@@ -233,6 +234,10 @@ impl World {
         let mut ignites: Vec<usize> = vec![];
         let mut dmg_b: Vec<(usize, f32)> = vec![];
         let mut shots: Vec<[f32; 7]> = vec![];
+        if b.rout.len() < n { b.rout.resize(n, 0.0); }
+        // how many are left on each side: soldiers who see their side break lose heart
+        let mut left = [0u32; 2]; for u in b.units.iter().filter(|u| u.alive) { left[u.side as usize] += 1; }
+        let ratio = [left[0] as f32 / b.start_side[0].max(1) as f32, left[1] as f32 / b.start_side[1].max(1) as f32];
         // walls, fences and gates stop attackers; moats and rivers too unless bridged
         let bars: Vec<(usize, f32, f32, f32, u8)> = self.buildings.iter().enumerate().filter(|(_, x)| x.hp > 0.0 && matches!(x.kind, WALL | FENCE | GATE)).map(|(k, x)| (k, x.x, x.y, if x.kind == FENCE { 1.9 } else { 2.6 }, x.kind)).collect();
         let wet: Vec<(f32, f32, f32)> = self.buildings.iter().filter(|x| matches!(x.kind, MOAT | RIVER)).map(|x| (x.x, x.y, if x.kind == MOAT { 2.7 * moat_scale(x) } else { 2.7 })).collect();
@@ -241,6 +246,20 @@ impl World {
             if !b.units[i].alive { continue; }
             let u = b.units[i].clone();
             let ud = &UNITS[u.kind as usize];
+            // morale: a unit running away does not fight; once clear of the field it is gone (alive, but out of the battle)
+            if b.rout[i] > 0.0 {
+                b.rout[i] -= dt;
+                let (mut best, mut bd) = (usize::MAX, f32::MAX);
+                for j in 0..n { if b.units[j].alive && b.units[j].side != u.side { let d = (b.units[j].x - u.x).powi(2) + (b.units[j].y - u.y).powi(2); if d < bd { bd = d; best = j; } } }
+                if best != usize::MAX { let d = bd.sqrt().max(0.1); b.units[i].x += (u.x - b.units[best].x) / d * ud.speed * 1.3 * dt; b.units[i].y += (u.y - b.units[best].y) / d * ud.speed * 1.3 * dt; b.units[i].face = (u.y - b.units[best].y).atan2(u.x - b.units[best].x); }
+                if b.rout[i] <= 0.0 { b.units[i].alive = false; b.fled[u.side as usize] += 1; if u.side == 1 && (u.kind as usize) < 5 { b.fled_kinds[u.kind as usize] += 1; } }
+                continue;
+            }
+            if u.kind != 4 && u.kind != 3 && !(u.held && u.pelev > 0.0) {
+                let hpf = u.hp / ud.hp;
+                let broken = if u.side == 1 { let limit = if b.tag == 0 { 0.6 } else { 0.45 }; (ratio[1] < limit && hpf < 0.5 && self.rf() < 0.03) || (ratio[1] < 0.3 && self.rf() < 0.02) } else { ratio[0] < 0.3 && hpf < 0.4 && self.rf() < 0.02 };
+                if broken { b.rout[i] = 7.0; continue; }
+            }
             b.units[i].cd = (u.cd - dt).max(0.0);
             b.units[i].anim = (b.units[i].anim - dt).max(0.0);
             if u.climb > 0.0 {   // up the ladder and over the wall
@@ -434,6 +453,7 @@ impl World {
         self.population = self.population.saturating_sub(b.militia_dead);
         let mut surv = [0u32; 5];
         for u in b.units.iter().filter(|u| u.side == 1 && u.alive) { surv[u.kind as usize] += 1; }
+        for k in 0..5 { surv[k] += b.fled_kinds[k]; }   // the ones who ran off come home too
         // loot: raiders that pillaged take a share of the stores
         let mut loot = [0i32; N_RES];
         if !won && b.pillage > 0.0 {
@@ -443,6 +463,7 @@ impl World {
         self.report = vec![self.report_seq as i32, won as i32, b.tag, atk_alive as i32, b.def_dead as i32, b.bld_lost as i32];
         self.report.extend(surv.iter().map(|&x| x as i32));
         self.report.extend(loot.iter());
+        self.report.extend([b.fled[1] as i32, b.fled[0] as i32]);   // attackers and defenders who ran away
         let ev = if won { EV_REPELLED } else { EV_RAID };
         self.push_event(ev, loot[GD as usize], b.def_dead as i32);
     }

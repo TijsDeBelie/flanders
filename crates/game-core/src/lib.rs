@@ -991,7 +991,7 @@ impl World {
     pub fn terrain_version(&self) -> u32 { self.terrain_ver }
     /// Building hit points [hp, maxhp, burning] per building (stride 3).
     pub fn building_health(&self) -> Vec<f32> { self.buildings.iter().flat_map(|b| [b.hp.max(0.0), battle::max_hp(b.kind, b.tier), b.burning]).collect() }
-    /// Last battle report: [seq, won, tag, attackersLeft, defenderDead, buildingsLost, survivors x5, loot x12].
+    /// Last battle report: [seq, won, tag, attackersLeft, defenderDead, buildingsLost, survivors x5, loot x12, attackersFled, defendersFled].
     pub fn last_report(&self) -> Vec<i32> { self.report.clone() }
     /// Ignite a building (for fire arrows or testing).
     pub fn set_fire(&mut self, idx: u32) { self.ignite(idx as usize); }
@@ -2031,5 +2031,40 @@ mod choice_tests {
         for _ in 0..(DAY * 2) { w.step(); w.stock[GR as usize] = 300; if w.choice_flat().first() == Some(&(CH_WINTER as i32)) { offered = true; break; } }
         assert!(offered, "the first day of winter brings a decision");
         let wood = w.stock[W as usize]; assert_eq!(w.choose(0), 0); assert!(w.stock[W as usize] >= wood + 80 - 20);
+    }
+}
+
+#[cfg(test)]
+mod morale_tests {
+    use super::*;
+    fn village() -> World {
+        let mut w = World::new(1337, 0, 0); w.stock = [3000; N_RES];
+        for (k, x, y) in [(HOUSE, 12, 4), (HOUSE, 17, 4), (HOUSE, -12, 6), (TOWER, 0, 16), (TOWER, 8, -16)] { w.place(k, x, y, 0); }
+        w
+    }
+    #[test]
+    fn a_beaten_raiding_party_breaks_and_runs() {
+        let mut fled = 0; let mut finished = 0;
+        for seed in 0..6u64 {
+            let mut w = village(); w.rng = Rng(seed * 104729 + 17);
+            w.army = [14, 10, 8, 4, 0]; w.population = 40;
+            assert!(w.start_raid(1.2, &[10, 3, 0, 0, 0], 0));
+            let mut n = 0; while w.battle_active() && n < 600 { w.step(); w.stock[GR as usize] = 3000; n += 1; }
+            if !w.battle_active() { finished += 1; }
+            let r = w.last_report(); let l = r.len();
+            fled += r[l - 2];
+        }
+        assert_eq!(finished, 6, "every battle ends");
+        assert!(fled > 0, "some bandits ran instead of dying to the last man ({fled})");
+    }
+
+    #[test]
+    fn the_ones_who_ran_come_home_with_the_survivors() {
+        let mut w = village(); w.army = [14, 10, 8, 4, 0]; w.population = 40; w.rng = Rng(99);
+        assert!(w.start_raid(0.4, &[12, 0, 0, 0, 0], 5));
+        let mut n = 0; while w.battle_active() && n < 600 { w.step(); w.stock[GR as usize] = 3000; n += 1; }
+        let r = w.last_report(); let l = r.len();
+        let survivors: i32 = r[6..11].iter().sum();
+        assert!(survivors >= r[l - 2], "fled attackers {} are among the survivors {survivors}", r[l - 2]);
     }
 }
