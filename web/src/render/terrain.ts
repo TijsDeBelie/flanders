@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { terrain_grid, type World } from '../wasm/game_core.js';
+import { patchWater, waterNormalTexture } from './water';
 
 export const HALF = 1200;
 export const STEP = 2.5;
@@ -23,22 +24,6 @@ function grainTexture() {
   return t;
 }
 
-function waterNormal() {
-  const s = 256, h = new Float32Array(s * s);
-  for (let k = 0; k < 6; k++) {
-    const fx = 1 + Math.floor(Math.random() * 5), fy = 1 + Math.floor(Math.random() * 5), ph = Math.random() * 6.28, ph2 = Math.random() * 6.28, a = 1 / (1 + k);
-    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) h[y * s + x] += a * Math.sin((x / s) * 6.283 * fx + ph) * Math.sin((y / s) * 6.283 * fy + ph2);
-  }
-  const data = new Uint8Array(s * s * 4);
-  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-    const dx = h[y * s + ((x + 1) % s)] - h[y * s + ((x + s - 1) % s)], dy = h[((y + 1) % s) * s + x] - h[((y + s - 1) % s) * s + x];
-    const n = new THREE.Vector3(-dx * 2.2, -dy * 2.2, 1).normalize();
-    data.set([(n.x * 0.5 + 0.5) * 255, (n.y * 0.5 + 0.5) * 255, (n.z * 0.5 + 0.5) * 255, 255], (y * s + x) * 4);
-  }
-  const t = new THREE.DataTexture(data, s, s, THREE.RGBAFormat); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; t.anisotropy = 8;
-  return t;
-}
-
 const C = (hex: number) => new THREE.Color(hex);
 const char = C(0x15110e), ash = C(0x3a3430), sand = C(0xd9c58c), wet = C(0x8f8363), grassA = C(0x5f8a3a), grassB = C(0x7a9a45), grassDry = C(0x9a9a52), forest = C(0x3f6a33), dirt = C(0x8a6b45),
   rock = C(0x7d7872), rockDark = C(0x5d5a56), snow = C(0xf2f5f8), hillGrass = C(0x6f8446);
@@ -50,7 +35,10 @@ export class Terrain {
   mesh: THREE.Mesh;
   water: THREE.Mesh;
   geo: THREE.PlaneGeometry;
-  private waterTex = waterNormal();
+  /** Ground height, one texel per vertex (half floats): the water shader reads it to tell how deep the water is, so shallows are pale and the shore foams. */
+  heightTex!: THREE.DataTexture; private heightData!: Uint16Array; private heightDirty = false; private heightAt0 = -1;
+  readonly waterTime = { value: 0 };
+  readonly waterTex = waterNormalTexture();
   private pos: THREE.BufferAttribute;
   private col: THREE.BufferAttribute;
   private nor: THREE.BufferAttribute;
@@ -76,17 +64,28 @@ export class Terrain {
     this.mesh = new THREE.Mesh(this.geo, mat);
     this.mesh.receiveShadow = true;
 
-    this.waterTex.repeat.set(70, 70);
+    this.heightData = new Uint16Array(NV * NV);
+    this.heightTex = new THREE.DataTexture(this.heightData, NV, NV, THREE.RedFormat, THREE.HalfFloatType);
+    this.heightTex.minFilter = this.heightTex.magFilter = THREE.LinearFilter; this.heightTex.wrapS = this.heightTex.wrapT = THREE.ClampToEdgeWrapping; this.heightTex.generateMipmaps = false;
+    this.uploadHeights();
     const wm = new THREE.MeshPhysicalMaterial({
-      color: 0x2c6f86, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.86,
-      normalMap: this.waterTex, normalScale: new THREE.Vector2(0.55, 0.55), clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1.6,
+      color: 0x2c6f86, roughness: 0.05, metalness: 0, transparent: true, opacity: 1, depthWrite: false,
+      normalMap: this.waterTex, normalScale: new THREE.Vector2(0.7, 0.7), clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.8,
     });
+    patchWater(wm, { heightTex: this.heightTex, half: HALF, step: STEP, nv: NV }, this.waterTime, false);
     this.water = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000).rotateX(-Math.PI / 2), wm);
     this.water.position.y = 0;
   }
 
   animate(t: number) {
-    this.waterTex.offset.set(t * 0.004, t * 0.0027);
+    this.waterTime.value = t;
+    if (this.heightDirty && t - this.heightAt0 > 0.4) this.uploadHeights(t);   // building changes the ground; refresh the depth texture a few times a second at most
+  }
+
+  /** Copy the current ground heights into the depth texture. */
+  private uploadHeights(t = 0) {
+    for (let k = 0; k < this.heights.length; k++) this.heightData[k] = THREE.DataUtils.toHalfFloat(this.heights[k]);
+    this.heightTex.needsUpdate = true; this.heightDirty = false; this.heightAt0 = t;
   }
 
   /** Recompute vertices in grid index rectangle [i0,i1]x[j0,j1] from heights (and refresh colours/normals). */
@@ -146,7 +145,7 @@ export class Terrain {
       const k = (b + j) * NV + (a + i);
       const x = -HALF + (a + i) * STEP, z = -HALF + (b + j) * STEP;
       if (others.length) { const own = Math.hypot(x - cx, z - cz); if (others.some(o => Math.hypot(x - o.x, z - o.z) < own)) continue; } // belongs to a neighbouring village
-      this.heights[k] = out[j * nx + i];
+      this.heights[k] = out[j * nx + i]; this.heightDirty = true;
     }
     this.updateRegion(a - 1, b - 1, c + 1, d + 1);
   }

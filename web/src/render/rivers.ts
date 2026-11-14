@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { Terrain } from './terrain';
+import { HALF, NV, STEP, type Terrain } from './terrain';
+import { patchWater } from './water';
 
 const S = 10, MOAT = 24, RIVER = 32, MAXP = 1500;
 /** Radii of the flat bottom of a moat piece (before its width setting) and of a river piece: the same numbers as the core's. */
@@ -61,7 +62,8 @@ export class RiverFlow {
     });
     this.mesh = new THREE.InstancedMesh(geo, mat, MAXP); this.mesh.count = 0; this.mesh.frustumCulled = false; this.mesh.renderOrder = 3;
     const pondGeo = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
-    const pondMat = new THREE.MeshStandardMaterial({ color: 0x2f6f98, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.93, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+    const pondMat = new THREE.MeshPhysicalMaterial({ color: 0x2f6f98, roughness: 0.05, metalness: 0, transparent: true, opacity: 1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, normalMap: terrain.waterTex, normalScale: new THREE.Vector2(0.7, 0.7), clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.8 });
+    patchWater(pondMat, { heightTex: terrain.heightTex, half: HALF, step: STEP, nv: NV }, terrain.waterTime, true);
     this.pond = new THREE.InstancedMesh(pondGeo, pondMat, MAXP); this.pond.count = 0; this.pond.frustumCulled = false; this.pond.renderOrder = 2;
     this.group.add(this.pond, this.mesh);
   }
