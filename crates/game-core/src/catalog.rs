@@ -63,6 +63,8 @@ pub const PORT: u8 = 35;
 pub const TOLL: u8 = 36;
 pub const ROAD: u8 = 37;
 pub const BRIDGE: u8 = 38;
+pub const HOSPITAL: u8 = 39;
+pub const GRAVEYARD: u8 = 40;
 
 /// Highest upgrade tier of a building: simple fences, drawbridges and moats do not upgrade.
 pub fn max_tier(kind: u8) -> u8 { match kind { FENCE | DRAWBRIDGE | MOAT | RIVER | RAISE | LOWER | ROAD => 0, _ => 3 } }
@@ -70,7 +72,7 @@ pub fn max_tier(kind: u8) -> u8 { match kind { FENCE | DRAWBRIDGE | MOAT | RIVER
 /// Pieces that reshape the ground instead of standing on it.
 pub fn is_edit(kind: u8) -> bool { matches!(kind, MOAT | RIVER | RAISE | LOWER) }
 
-pub static DEFS: [Def; 39] = [
+pub static DEFS: [Def; 41] = [
     Def { name: "House", cat: 0, r: 3.2, weight: 1, cost: &[(W, 12)], jobs: 0, inputs: &[], outputs: &[], cycle: 0, req: 0, req_arg: 0, housing: 5, max_slope: 0.35, pad: true, desc: "Homes for your villagers. Better tiers house more people." },
     Def { name: "Farm", cat: 1, r: 6.5, weight: 2, cost: &[(W, 25)], jobs: 2, inputs: &[], outputs: &[(GR, 10)], cycle: 8, req: 0, req_arg: 0, housing: 0, max_slope: 0.22, pad: true, desc: "Grows grain to feed the village. Needs flat ground." },
     Def { name: "Wall", cat: 4, r: 2.4, weight: 1, cost: &[(ST, 5)], jobs: 0, inputs: &[], outputs: &[], cycle: 0, req: 0, req_arg: 0, housing: 0, max_slope: 2.4, pad: true, desc: "A wall segment. Rotate with R and chain them into a curtain wall." },
@@ -110,6 +112,8 @@ pub static DEFS: [Def; 39] = [
     Def { name: "Toll Post", cat: 5, r: 3.0, weight: 2, cost: &[(W, 20), (PL, 10)], jobs: 1, inputs: &[], outputs: &[], cycle: 0, req: 0, req_arg: 0, housing: 0, max_slope: 0.5, pad: true, desc: "A keeper and a barrier on the road: travellers pay a toll. The busier the roads round it, the more it earns. Place it beside a path." },
     Def { name: "Road", cat: 6, r: 1.0, weight: 0, cost: &[(W, 1)], jobs: 0, inputs: &[], outputs: &[], cycle: 0, req: 0, req_arg: 0, housing: 0, max_slope: 1.2, pad: false, desc: "A dirt road piece. Draw a path of them and they link up like the roads that grow between buildings: they level the ground, people walk them and they are paved in time. A road also pushes your border outwards." },
     Def { name: "Bridge", cat: 4, r: 2.0, weight: 2, cost: &[(PL, 10), (W, 8)], jobs: 0, inputs: &[], outputs: &[], cycle: 0, req: 0, req_arg: 0, housing: 0, max_slope: 9.0, pad: false, desc: "Spans a moat, river or narrow water. Click near the water: it snaps to the banks, finds the shortest way over and puts supports in the middle where the span needs them. Costs more planks the longer it is. Starts as a wooden footbridge; upgrade it to timber, stone and a great stone bridge, which span wider." },
+    Def { name: "Infirmary", cat: 5, r: 4.2, weight: 3, cost: &[(ST, 40), (PL, 25), (W, 20)], jobs: 3, inputs: &[], outputs: &[], cycle: 0, req: 0, req_arg: 0, housing: 0, max_slope: 0.3, pad: true, desc: "Monks and nurses tend the sick in a ward of beds with a herb garden. Every bed cures people during a plague and fewer die; it needs its staff. Upgrade it into a hospital, a great hospital and a royal hospital for more beds." },
+    Def { name: "Graveyard", cat: 5, r: 3.6, weight: 2, cost: &[(ST, 20), (W, 10)], jobs: 1, inputs: &[], outputs: &[], cycle: 0, req: 0, req_arg: 0, housing: 0, max_slope: 0.4, pad: true, desc: "Consecrated ground where the dead are laid to rest. A gravedigger buries them; when plots run out, or there is no one to bury, bodies lie unburied and sickness and misery follow. Upgrade it for more plots." },
 ];
 
 /// Resources needed to upgrade to `new_tier` (1..=3).
@@ -140,6 +144,8 @@ pub fn options(kind: u8) -> &'static [Opt] {
         CHAPEL => &[("Bell tower", "A small bell tower.", 0), ("Stained glass", "Coloured windows.", 1), ("Graveyard", "A walled burial ground.", 0), ("Lych gate", "A roofed gate at the churchyard.", 0)],
         WELL => &[("Roof", "A little roof over the well.", 0), ("Trough", "A stone trough beside it.", 0)],
         BRIDGE => &[("Lanterns", "Lanterns on the posts at both ends.", 0), ("Pennants", "Pennants on the end posts.", 0)],
+        HOSPITAL => &[("Herb garden", "A walled garden of healing herbs: patients recover a little faster.", 0), ("Quarantine ward", "A separate ward for the worst cases: fewer die.", 1), ("Chapel ward", "A chapel in the ward: the dying are comforted and spirits rise.", 1), ("Banner", "The hospital's pennant.", 0)],
+        GRAVEYARD => &[("Chapel of rest", "A small chapel by the gate: funerals bring comfort.", 0), ("Memorial cross", "A tall stone cross for the village's dead.", 0), ("Yew trees", "Old yews, the churchyard's guardians.", 0), ("Charnel house", "A bone house, so old graves can be reused: 50% more plots.", 1)],
         MOAT | RIVER | RAISE | LOWER | FENCE | ROAD => &[],
         _ => &[("Banner", "A pennant on a pole.", 0), ("Lanterns", "Lanterns at the door.", 0), ("Awning", "A cloth awning.", 0), ("Stone footing", "A stone plinth.", 1)],
     }

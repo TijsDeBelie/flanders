@@ -768,7 +768,37 @@ const bridgeGhost: Model = b => {
   for (const side of [-1, 1]) for (let s = -4.8; s <= 4.81; s += 2.4) b.box(0.2, 1.1, 0.2, m.darkwood, s, 0.5, side * 1.1);
 };
 
-const MODELS: Model[] = [house, farm, wall, tower, woodcutter, sawmill, quarry, claypit, brickworks, mine(false), mine(true), charcoal, smelter, blacksmith, mint, townhall, well, chapel, lodge, barracks, builders, fence, gate, drawbridge, moat, storehouse, keep, courthouse, market, waterwheel, garden, park, riverPiece, moundPiece, pitPiece, port, toll, roadPiece, bridgeGhost];
+// Infirmary: a long ward with a gabled roof, a herb bed and a red cross over the door.
+const hospital: Model = b => {
+  const t = b.t, m = M(), wm = t === 0 ? m.wood : t === 1 ? m.plaster : m.stone, rm = t >= 2 ? m.slate : t === 1 ? m.tile : m.thatch;
+  const len = 6 + t * 1.4, dep = 3.4 + t * 0.5, h = 2.4 + t * 0.5;
+  b.box(len, h, dep, wm, 0, 0, 0); b.gable(len, dep, 1.5 + t * 0.4, rm, 0, h, 0, 0.5);
+  b.box(dep, h, 2.6, wm, -len / 4, 0, dep / 2 + 1.0); b.gable(dep, 2.6, 1.2, rm, -len / 4, h, dep / 2 + 1.0, 0.4);
+  b.box(1.0, 1.7, 0.1, m.darkwood, 0.6, 0, dep / 2 + 0.05);
+  const red = new THREE.MeshStandardMaterial({ color: 0xb02a2a, roughness: 0.8 });
+  b.box(0.2, 0.8, 0.06, red, 0.6, h - 0.1, dep / 2 + 0.1); b.box(0.8, 0.2, 0.06, red, 0.6, h + 0.2, dep / 2 + 0.1);
+  for (let i = 0; i < 3; i++) b.box(0.6, 0.6, 0.06, m.glass, -len / 2 + 1.0 + i * 1.1, 1.0, dep / 2 + 0.04);
+  const bed = new THREE.MeshStandardMaterial({ color: 0x4f8a2f, roughness: 0.9 });
+  for (let i = 0; i < 3; i++) { b.box(1.8, 0.25, 0.7, m.earth, len / 2 - 0.2, 0, -1.2 + i * 1.0); b.sphere(0.25, bed, len / 2 - 0.2, 0.45, -1.2 + i * 1.0); }
+  if (t >= 2) b.cyl(0.9, 1.0, 0.6, m.stone, len / 2 + 1.4, 0, -1.4, 12);
+};
+// Graveyard: a low wall round rows of headstones and crosses, a lych-gate and yew trees.
+const graveyard: Model = b => {
+  const t = b.t, m = M(), R = 4.2 + t * 0.8, leaf = new THREE.MeshStandardMaterial({ color: 0x2f5a2f, roughness: 0.9 });
+  b.cyl(R + 0.4, R + 0.4, 0.05, new THREE.MeshStandardMaterial({ color: 0x5f7f40, roughness: 1 }), 0, 0, 0, 24);
+  for (const [x, z, w, d] of [[0, -R, R * 2, 0.3], [0, R, R * 2, 0.3], [-R, 0, 0.3, R * 2], [R, 0, 0.3, R * 2]] as const) b.box(w, 0.7, d, t >= 1 ? m.stone : m.wood, x, 0, z);
+  const rows = 3 + t;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < 4; c++) {
+    const x = -R + 1.4 + c * ((R * 2 - 2.8) / 3), z = -R + 1.5 + r * ((R * 2 - 3) / Math.max(1, rows - 1));
+    if (r % 2 === 0 && c % 2 === 0) { b.box(0.14, 1.0, 0.14, m.stone, x, 0, z); b.box(0.6, 0.14, 0.14, m.stone, x, 0.65, z); }
+    else { b.box(0.55, 0.8, 0.14, m.stone, x, 0, z); b.cyl(0.275, 0.275, 0.14, m.stone, x, 0.8, z, 10).rotation.x = Math.PI / 2; }
+    b.box(0.5, 0.1, 1.0, m.earth, x, 0, z + 0.7);
+  }
+  b.box(0.2, 2.2, 0.2, m.darkwood, -0.9, 0, R); b.box(0.2, 2.2, 0.2, m.darkwood, 0.9, 0, R); b.gable(2.4, 1.4, 0.7, t >= 1 ? m.tile : m.thatch, 0, 2.2, R, 0.25);
+  for (const [x, z] of [[-R + 0.5, -R + 0.5], [R - 0.5, -R + 0.5]] as const) { b.cyl(0.2, 0.3, 1.8, m.log, x, 0, z, 7); b.cone(0.9, 2.6, leaf, x, 1.0, z, 8); }
+  if (t >= 2) { b.box(0.5, 1.6, 0.5, m.stone, 0, 0, 0); b.box(1.1, 0.25, 0.25, m.stone, 0, 1.2, 0); }
+};
+const MODELS: Model[] = [house, farm, wall, tower, woodcutter, sawmill, quarry, claypit, brickworks, mine(false), mine(true), charcoal, smelter, blacksmith, mint, townhall, well, chapel, lodge, barracks, builders, fence, gate, drawbridge, moat, storehouse, keep, courthouse, market, waterwheel, garden, park, riverPiece, moundPiece, pitPiece, port, toll, roadPiece, bridgeGhost, hospital, graveyard];
 
 /** Merge a finished building's static meshes into one mesh per material. A house is built from dozens of boxes, beams and
  *  roof pieces; drawn separately each one costs a draw call (and another in the shadow pass). Animated parts (flags, wheels,

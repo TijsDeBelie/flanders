@@ -460,7 +460,7 @@ impl World {
             let alive = b.units.iter().filter(|u| u.side == 0 && u.kind == 1 && !u.from_army && u.alive && (u.hx - t.x).abs() < 0.01 && (u.hy - t.y).abs() < 0.01).count() as u8;
             t.garrison = t.garrison.min(alive);
         }
-        self.population = self.population.saturating_sub(b.militia_dead);
+        self.kill(b.militia_dead, DIED_WAR, 3);
         let mut surv = [0u32; 5];
         for u in b.units.iter().filter(|u| u.side == 1 && u.alive) { surv[u.kind as usize] += 1; }
         for k in 0..5 { surv[k] += b.fled_kinds[k]; }   // the ones who ran off come home too
@@ -591,7 +591,7 @@ impl World {
         if self.population < n.saturating_add(3) { return -13; }
         for &(r, c) in u.cost { if (self.stock[r as usize] as i64) < c as i64 * n as i64 { return -6; } }
         for &(r, c) in u.cost { self.stock[r as usize] -= c * n as i32; }
-        self.population -= n;
+        self.enlist(n);
         self.queue[kind as usize] += n;
         0
     }

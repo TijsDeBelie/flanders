@@ -150,6 +150,9 @@ function applyCmd(w: World, c: Cmd) {
     case 'settle': w.settle(c.kind ?? 0, c.x ?? 0, c.idx ?? 0); break;
     case 'choose': w.choose(c.kind ?? 0); break;
     case 'treaty': if ((c.y ?? 1) === 0) w.treaty_end(c.idx!, c.kind ?? 0); else w.treaty_set(c.idx!, c.kind ?? 0, c.x ?? 10); break;
+    case 'envoy': w.envoy(c.idx!); break;
+    case 'marriage': w.marriage(c.idx!); break;
+    case 'war': w.declare_war(c.idx!); break;
     case 'caravan': w.caravan_send(c.kind ?? 0, c.x ?? 0, c.idx ?? 0, c.y ?? 0, c.ax ?? 0); break;
     case 'rebuild': w.rebuild(c.idx!); break;
     case 'form': w.det_form(Uint32Array.from(c.units ?? [])); break;
@@ -372,7 +375,13 @@ function onTrade(r: Rival, c: Cmd) {
     const got = w.settle(c.kind ?? 0, c.x ?? 0, their);
     if (got > 0) { commit({ op: 'settle', kind: c.kind, x: c.x, idx: their }); ui.toast(`${r.name} paid ${got} gold for the goods.`, 'good'); updateHud(); }
   } else if (c.op === 'treaty' && (c.y ?? 1) !== 0) {   // an offer: we agree, and tell them with our own signed copy (without `to`, so it is not answered again)
-    if (w.treaty_set(their, c.kind ?? 0, c.x ?? 10)) { commit({ op: 'treaty', idx: their, kind: c.kind, x: c.x }); ui.toast(`${r.name} offers ${c.kind === 1 ? 'peace' : 'a trade pact'} for ${c.x} days. Agreed.`, 'good'); }
+    const what = c.kind === 2 ? 'an alliance' : c.kind === 1 ? 'peace' : 'a trade pact';
+    if (w.treaty_acceptable(their, c.kind ?? 0) && w.treaty_set(their, c.kind ?? 0, c.x ?? 10)) { commit({ op: 'treaty', idx: their, kind: c.kind, x: c.x }); ui.toast(`${r.name} offers ${what} for ${c.x} days. Agreed.`, 'good'); }
+    else { commit({ op: 'treaty', idx: their, kind: c.kind, y: 0, to: r.key }); ui.toast(`${r.name} offers ${what}, but we do not trust them enough. Refused.`, 'info'); }
+  } else if (c.op === 'treaty' && c.y === 0) {   // they turned our offer down: it is void on our side too
+    w.treaty_end(their, c.kind ?? 0); commit({ op: 'treaty', idx: their, kind: c.kind, y: 0 }); ui.toast(`${r.name} refused your offer.`, 'info'); afterLocalChange();
+  } else if (c.op === 'war') {
+    ui.toast(`${r.name} has declared war on you!`, 'bad');
   }
 }
 
@@ -385,8 +394,12 @@ function doTrade(key: string, action: string, res: number, amount: number, escor
     if (code !== 0) { ui.toast(code === -2 ? 'You do not have that much to send.' : code === -3 ? 'Not enough spearmen for the escort.' : 'Cannot send that.', 'bad'); return; }
     commit({ op: 'caravan', kind: res, x: amount, idx: their, y: dist, ax: escort }); sound.click(); ui.toast(`A caravan of ${amount} ${RES[res].name.toLowerCase()} sets out for ${r.name}.`, 'good'); updateHud();
   } else {
-    const kind = action === 'peace' ? 1 : 0, days = 30;
-    if (w.treaty_set(their, kind, days)) { commit({ op: 'treaty', idx: their, kind, x: days, to: key }); ui.toast(`You offer ${r.name} ${kind ? 'peace' : 'a trade pact'} for ${days} days.`, 'info'); }
+    if (action === 'envoy') { const code = w.envoy(their); if (code === 0) { commit({ op: 'envoy', idx: their }); ui.toast(`An envoy with gifts rides to ${r.name}.`, 'good'); updateHud(); } else ui.toast(code === -20 ? 'An envoy went recently: wait a few days.' : 'An envoy costs 20 gold.', 'bad'); return; }
+    if (action === 'marriage') { const code = w.marriage(their); if (code === 0) { commit({ op: 'marriage', idx: their }); ui.toast(`A royal marriage binds your house to ${r.name}'s.`, 'good'); updateHud(); } else ui.toast(code === -21 ? 'They do not like you enough yet. Send envoys first.' : code === -1 ? 'You are already married into that house.' : 'A wedding costs 150 gold.', 'bad'); return; }
+    if (action === 'war') { w.declare_war(their); commit({ op: 'war', idx: their, to: key }); ui.toast(`You declared war on ${r.name}.`, 'bad'); return; }
+    const kind = action === 'alliance' ? 2 : action === 'peace' ? 1 : 0, days = 30;
+    if (!w.treaty_acceptable(their, kind)) { ui.toast(kind === 2 ? 'They will not ally with you yet: you need a trade pact and warm relations.' : kind === 0 ? 'They do not like you enough for a trade pact yet. Send an envoy.' : 'They will not make peace with you.', 'bad'); return; }
+    if (w.treaty_set(their, kind, days)) { commit({ op: 'treaty', idx: their, kind, x: days, to: key }); ui.toast(`You offer ${r.name} ${kind === 2 ? 'an alliance' : kind ? 'peace' : 'a trade pact'} for ${days} days.`, 'info'); }
   }
 }
 
@@ -549,7 +562,7 @@ function onLocalReport(rep: number[]) {
 }
 
 function updatePeers() {
-  ui.setPeers([...rivals.values()].map(r => ({ key: r.key, name: r.name + (r.online ? '' : ' (away)'), pop: r.village.world.population(), buildings: r.village.world.building_count(), sync: r.sync, busy: r.village.world.battle_active() })), worldName);
+  ui.setPeers([...rivals.values()].map(r => ({ key: r.key, name: r.name + (r.online ? '' : ' (away)'), pop: r.village.world.population(), buildings: r.village.world.building_count(), sync: r.sync, busy: r.village.world.battle_active(), ...relOf(r.key) })), worldName);
 }
 
 // ---------- start ----------
@@ -702,6 +715,13 @@ function applyFlag(f: Flag) {
 
 function afterLocalChange() { refreshTerrain(lv.world); lv.syncFull(); lv.afterTick(); if (forestDirtyFlag) rebuildForest(); updateSelection(); updateHud(); }
 
+/** How we stand with another village: feeling, marriage and treaties (1 trade pact, 2 peace, 4 alliance). */
+function relOf(key: string) {
+  const tag = tagOf(key), f = lv.world.relations_flat();
+  for (let i = 0; i + 3 < f.length; i += 4) if (f[i] === tag) return { rel: f[i + 1], married: f[i + 2] === 1, treaties: f[i + 3] };
+  return { rel: 0, married: false, treaties: 0 };
+}
+
 function updateHud() {
   const w = lv.world;
   let barracks = -1; const f = w.buildings_flat(); for (let i = 0; i < f.length; i += 10) if (f[i] === 19) barracks = Math.max(barracks, f[i + 1]);
@@ -711,6 +731,7 @@ function updateHud() {
     tick: Number(w.tick()), stocks: Array.from(w.stocks()), rates, pop: w.population(), cap: w.capacity(), sick: w.sick(),
     joy: w.happiness(), eff: w.efficiency(), jobs: w.jobs(), radius: w.build_radius(), buildings: w.building_count(), storage: w.storage(),
     army: Array.from(w.army()), queued: Array.from(w.queued()), away: Array.from(w.away()), guards: w.guards(), barracks, wildlife: wildlife.count,
+    vitals: Array.from(w.vitals()), beds: w.hospital_beds(), devotion: w.devotion(),
   });
   ui.maxAttack(Array.from(w.army())); updateDets();
   { // the border follows what has been built; redrawn only when the land changed

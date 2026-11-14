@@ -66,3 +66,7 @@ Still not done:
 - 6: a second tier of building options (each needs a new drawing), and free-form roads as a separate tool (paths still follow from the buildings).
 - 7: terrain level of detail (needs a real browser), the demo village on the batch command, and an agent scenario test through the MCP server.
 - Graphify's advisory remarks on `main.ts` (hubs `commit`, `updateHud`, `afterLocalChange`): `main.ts` is still one large file.
+
+## Diplomacy, care and death (done)
+Relations (−100..100) with every other village, envoys, marriage, alliances, declared war; chapels with weekly services and tithes; infirmary/hospital (beds, herb garden, quarantine ward); graveyards, burial plots and unburied dead (miasma); a population ledger (`population = 10 + arrived + born − enlisted − left − Σdied`) proven by a per-tick test.
+Not done: gifts as a caravan flag, refusing caravans from hostile villages, MCP/agent tools for diplomacy.

@@ -28,7 +28,7 @@ export const CATS = [
   { name: 'Industry', icon: '⚒️' }, { name: 'Defence', icon: '🛡️' }, { name: 'Civic', icon: '⛪' }, { name: 'Land', icon: '⛰️' },
 ];
 
-export const KIND_ICON = ['🏠', '🌾', '🧱', '🗼', '🪓', '🪚', '🪨', '🟤', '🏺', '⛏️', '💰', '♨️', '🔥', '⚒️', '🪙', '🏰', '🕳️', '⛪', '🏹', '⚔️', '🛠️', '🪵', '🚪', '🌉', '🌊', '📦', '🏯', '⚖️', '🏪', '☸️', '🥕', '🌳', '🏞️', '⛰️', '🕳️', '⚓', '🚧', '🛤️', '🪵'];
+export const KIND_ICON = ['🏠', '🌾', '🧱', '🗼', '🪓', '🪚', '🪨', '🟤', '🏺', '⛏️', '💰', '♨️', '🔥', '⚒️', '🪙', '🏰', '🕳️', '⛪', '🏹', '⚔️', '🛠️', '🪵', '🚪', '🌉', '🌊', '📦', '🏯', '⚖️', '🏪', '☸️', '🥕', '🌳', '🏞️', '⛰️', '🕳️', '⚓', '🚧', '🛤️', '🪵', '🏥', '🪦'];
 
 /** Kinds without a levelled pad under them (walls, fences, gates, drawbridges, moats). */
 export const NOPAD = new Set([2, 21, 22, 23, 24, 32, 33, 34, 37, 38]);
@@ -47,6 +47,7 @@ export const TIER_NAMES: Record<number, string[]> = {
   20: ["Carpenter's Shed", "Builders' Yard", "Masons' Lodge", 'Guild Hall'],
   25: ['Storehouse', 'Warehouse', 'Stone Warehouse', 'Great Warehouse'], 26: ['Motte Tower', 'Stone Keep', 'Great Keep', 'Citadel'], 27: ['Moot Hall', 'Courthouse', 'Assize Hall', 'Royal Court'], 28: ['Market Stalls', 'Market Square', 'Market Hall', 'Grand Market'], 29: ['Mill Wheel', 'Watermill', 'Stone Mill', 'Great Mill'], 30: ['Kitchen Garden', 'Herb Garden', 'Walled Garden', 'Pleasure Garden'], 31: ['Green', 'Park', 'Gardens', 'Royal Park'], 32: ['River'], 33: ['Raised Ground'], 34: ['Lowered Ground'],
   35: ['Landing Stage', 'Harbour', 'Port', 'Great Port'], 36: ['Toll Post', 'Toll House', 'Toll Gate', 'Customs House'], 37: ['Dirt Road'], 38: ['Footbridge', 'Timber Bridge', 'Stone Bridge', 'Great Bridge'],
+  39: ['Infirmary', 'Hospice', 'Hospital', 'Great Hospital'], 40: ['Burial Ground', 'Graveyard', 'Cemetery', 'Great Necropolis'],
   21: ['Spiked Logs'], 22: ['Wooden Gate', 'Timber Gate', 'Stone Gatehouse', 'Fortified Gatehouse'], 23: ['Drawbridge'], 24: ['Moat'],
 };
 export const tierName = (kind: number, tier: number) => (TIER_NAMES[kind] ?? GENERIC_TIERS)[tier];
@@ -96,6 +97,9 @@ export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; ton
     case 16: return { text: 'A bitter winter without firewood: someone froze to death.', tone: 'bad' };
     case 18: return { text: `${CHOICES[a]?.title ?? 'A decision'}: the village waits for your word.`, tone: 'info' };
     case 19: return { text: `You decided: ${CHOICES[a]?.options[b] ?? ''}`, tone: 'info' };
+    case 22: return { text: `Bodies lie unburied and sickness spreads: ${a} dead have no grave.`, tone: 'bad' };
+    case 23: return { text: `The church held a service. The tithe brought ${a} gold.`, tone: 'good' };
+    case 24: return { text: 'A foreign envoy was received with gifts.', tone: 'info' };
     case 21: return b === -1 ? { text: `${HERO_NAME(a)} has fallen. You may take another lord into your service.`, tone: 'bad' } : b > 0 ? { text: `${HERO_NAME(a)} has grown into a level ${b} commander.`, tone: 'good' } : { text: `${HERO_NAME(a)} takes command of your defence.`, tone: 'good' };
     case 17: return { text: `Robbers waylaid a caravan: ${a} ${RES[b]?.name.toLowerCase() ?? 'goods'} lost.`, tone: 'bad' };
     case 15: return a >= 0 ? { text: `Merchants at your port bought ${RES[b]?.name.toLowerCase() ?? 'goods'} for ${a} gold.`, tone: 'good' } : { text: `Merchants sold you grain for ${-a} gold.`, tone: 'info' };

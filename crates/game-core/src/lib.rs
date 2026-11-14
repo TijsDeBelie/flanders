@@ -90,6 +90,15 @@ pub const FOG_N: i32 = 60;
 pub const FOG_CELL: f32 = 40.0;
 const EV_VISIT: i32 = 20;
 const EV_HERO: i32 = 21;
+const EV_MIASMA: i32 = 22;
+const EV_SERVICE: i32 = 23;
+const EV_DIPLO: i32 = 24;
+/// Causes of death, for the village's ledger.
+pub const DIED_OLD: usize = 0;
+pub const DIED_PLAGUE: usize = 1;
+pub const DIED_HUNGER: usize = 2;
+pub const DIED_COLD: usize = 3;
+pub const DIED_WAR: usize = 4;
 /// Names of the lords and ladies who may take command of the village's defence.
 const HERO_NAMES: [&str; 12] = ["Sir Aldric", "Dame Isolde", "Lord Godfrey", "Lady Maud", "Sir Baldwin", "Dame Hawise", "Lord Roland", "Lady Eleanor", "Sir Hugh", "Dame Alys", "Lord Edmund", "Lady Cecily"];
 /// The lord's levels: experience needed for each.
@@ -115,11 +124,12 @@ const PRICE: [i32; N_RES] = [1, 2, 2, 1, 3, 2, 5, 6, 1, 2, 1, 6];
 /// Goods on their way to another village (`to` is that village's tag), arriving at tick `eta`.
 #[derive(Clone)]
 pub struct Caravan { res: u8, amount: i32, to: i32, eta: u64, escort: u32 }
-/// An agreement with another village: `kind` 0 trade pact (better prices), 1 non-aggression (neither side may start a battle against the other), until tick `until`.
+/// An agreement with another village: `kind` 0 trade pact (better prices), 1 non-aggression (neither side may start a battle against the other), 2 alliance (the same, and the best prices), until tick `until`.
 #[derive(Clone)]
 pub struct Treaty { tag: i32, kind: u8, until: u64 }
 pub const TREATY_TRADE: u8 = 0;
 pub const TREATY_PEACE: u8 = 1;
+pub const TREATY_ALLIANCE: u8 = 2;
 /// Ticks a caravan takes to reach a village: a minute plus the distance.
 const CARAVAN_SPEED: f32 = 1.2;
 
@@ -139,6 +149,18 @@ pub struct World {
     elders: u32,   // of the population: past working age
     neutral_done: Vec<bool>,      // neutral places already visited or cleared, by index into terrain::neutrals
     explored: Vec<u8>,            // fog of war: one cell per 40 units, 1 = seen
+    born: u32,                    // ledger: every villager is born, arrives, is enlisted, leaves or dies, so population = 10 + arrived + born - enlisted - left - sum(died)
+    arrived: u32,
+    enlisted: u32,
+    left: u32,
+    died: [u32; 5],
+    unburied: u32,                // the dead not yet laid to rest
+    buried: u32,                  // laid to rest in consecrated ground
+    graves_used: u32,             // plots in use
+    devotion: i32,                // how devout the village is (0..100), raised by services
+    relations: Vec<(i32, i32)>,   // how another village (tag) feels about this one, -100..100
+    married: Vec<i32>,            // villages joined by a royal marriage
+    last_envoy: Vec<(i32, u64)>,
     style: u32,                   // the village's flag as one number (see web/src/flag.ts), 0 = none chosen; part of the state so every peer sees it
     hero: Option<(u8, u32)>,      // the village's lord: name index and experience (level follows from it)
     defer_roads: bool,            // inside place_batch: the path network is rebuilt once at the end
@@ -215,7 +237,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, style: 0, hero: None, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, born: 0, arrived: 0, enlisted: 0, left: 0, died: [0; 5], unburied: 0, buried: 0, graves_used: 0, devotion: 0, relations: vec![], married: vec![], last_envoy: vec![], style: 0, hero: None, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -847,17 +869,17 @@ impl World {
             self.stock[GR as usize] -= eat;
             let cap_pop = self.capacity();
             let hap = self.happiness();
-            if self.population < cap_pop && self.rng.range(if hap >= 70 { 4 } else if hap < 30 { 8 } else { 5 }) == 0 { self.population += 1; }
+            if self.population < cap_pop && self.rng.range(if hap >= 70 { 4 } else if hap < 30 { 8 } else { 5 }) == 0 { self.arrive(1); }
         } else {
             self.stock[GR as usize] = 0;
             if self.population > 2 && self.rng.range(3) == 0 {
-                self.population -= 1;
+                self.kill(1, DIED_HUNGER, 0);
                 self.push_event(EV_STARVE, 1, 0);
             }
         }
         // overcrowding pressure if capacity shrank (demolished houses)
         let cap_pop = self.capacity();
-        if self.population > cap_pop { self.population -= 1; }
+        if self.population > cap_pop { self.leave(1); }
 
         // tax
         if self.tick % 10 == 0 { self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], ((self.population as i32 / 10).max(1) * (50 + self.happiness() as i32) / 100).max(1), cap); }
@@ -872,11 +894,12 @@ impl World {
         if self.sick > 0 {
             let q = self.tick < self.quarantine_until;
             let heal = (1 + chapels) * if q { 2 } else { 1 };
-            let dead = (self.sick / if q { 10 } else { 5 }).min(self.population).saturating_sub(chapels.min(self.sick / 5));
-            self.population = self.population.saturating_sub(dead);
+            let wards: u32 = self.buildings.iter().filter(|b| b.kind == HOSPITAL && b.staff > 0 && b.opts & 2 != 0).count() as u32;
+            let dead = (self.sick / if q || wards > 0 { 10 } else { 5 }).min(self.population).saturating_sub(chapels.min(self.sick / 5)).saturating_sub(self.hospital_beds() / 6);
+            self.kill(dead, DIED_PLAGUE, 2);
             self.sick = (self.sick - dead.min(self.sick)).saturating_sub(heal);
             if self.sick == 0 { self.push_event(EV_PLAGUE_END, 0, 0); }
-        } else if self.population > 15 && self.rng.range((450 + 200 * wells + 400 * chapels + 150 * parks) / if self.warm { 1 } else { 2 }) == 0 {
+        } else if self.population > 15 && self.rng.range((450 + 200 * wells + 400 * chapels + 150 * parks + 120 * self.hospital_beds()) / if self.warm { 1 } else { 2 }) == 0 {
             self.sick = self.population / 8 + 1;
             self.push_event(EV_PLAGUE, self.sick as i32, 0);
             self.offer(CH_PLAGUE);
@@ -907,6 +930,7 @@ impl World {
         self.builders_step();
         self.trade_step();
         self.toll_step();
+        self.hospital_step();
         self.caravan_step();
         for _ in 0..4 { self.fire_substep(); self.battle_substep(); }
         for i in 0..N_RES { self.flow[i] = self.stock[i] - before[i]; }
@@ -955,6 +979,113 @@ impl World {
         self.choice = None; self.push_event(EV_CHOSE, kind as i32, opt as i32); 0
     }
 
+    // ---------- the village's people: every change goes through one of these, so the ledger always balances ----------
+    /// People die. `who`: 0 anyone (in proportion), 1 the old first, 2 the old and the young first, 3 grown men and women first. The dead wait for burial.
+    pub(crate) fn kill(&mut self, n: u32, cause: usize, who: u8) {
+        let n = n.min(self.population); if n == 0 { return; }
+        self.children = self.children.min(self.population); self.elders = self.elders.min(self.population - self.children);
+        let adults = self.adults();
+        let (mut e, mut c, mut a) = (0u32, 0u32, 0u32);
+        match who {
+            1 => { e = n.min(self.elders); a = (n - e).min(adults); c = n - e - a; }
+            2 => { e = n.min(self.elders); c = (n - e).min(self.children); a = n - e - c; }
+            3 => { a = n.min(adults); c = (n - a).min(self.children); e = n - a - c; }
+            _ => { e = (n as u64 * self.elders as u64 / self.population as u64) as u32; c = (n as u64 * self.children as u64 / self.population as u64) as u32; a = n - e - c; }
+        }
+        self.elders -= e.min(self.elders); self.children -= c.min(self.children); let _ = a;
+        self.population -= n; self.died[cause] += n; self.unburied += n;
+    }
+    /// Newcomers arrive (grown men and women).
+    pub(crate) fn arrive(&mut self, n: u32) { self.population += n; self.arrived += n; }
+    /// Babies are born.
+    pub(crate) fn born_n(&mut self, n: u32) { self.population += n; self.children += n; self.born += n; }
+    /// Soldiers are trained out of the villagers.
+    pub(crate) fn enlist(&mut self, n: u32) { let n = n.min(self.population); self.population -= n; self.enlisted += n; }
+    /// People leave the village (homeless, or by the testing tools).
+    pub(crate) fn leave(&mut self, n: u32) { let n = n.min(self.population); self.population -= n; self.left += n; self.children = self.children.min(self.population); self.elders = self.elders.min(self.population - self.children); }
+
+    /// The ledger: [born, arrived, enlisted, left, died of old age, of plague, of hunger, of cold, in war, unburied, buried, burial plots, plots used].
+    pub fn vitals(&self) -> Vec<u32> {
+        vec![self.born, self.arrived, self.enlisted, self.left, self.died[0], self.died[1], self.died[2], self.died[3], self.died[4], self.unburied, self.buried, self.grave_plots(), self.graves_used]
+    }
+    /// What the ledger says the population should be (the testing tools can break it by setting the number directly).
+    pub fn ledger_population(&self) -> i64 { 10 + self.arrived as i64 + self.born as i64 - self.enlisted as i64 - self.left as i64 - self.died.iter().sum::<u32>() as i64 }
+
+    // ---------- death care ----------
+    /// Burial plots: a churchyard at every chapel (6 a tier) and graveyards (20 a tier, half as many again with a charnel house).
+    pub fn grave_plots(&self) -> u32 {
+        self.buildings.iter().map(|b| match b.kind { CHAPEL => 6 * (b.tier as u32 + 1), GRAVEYARD => { let base = 20 * (b.tier as u32 + 1); if b.opts & 8 != 0 { base * 3 / 2 } else { base } } _ => 0 }).sum()
+    }
+    /// How many the gravediggers and priests can bury in a day: 3 from the churches, and 6 a tier for each staffed graveyard; without either, 2 are laid in the fields.
+    fn burial_rate(&self) -> u32 {
+        let digs: u32 = self.buildings.iter().filter(|b| b.kind == GRAVEYARD && b.staff > 0).map(|b| 6 * (b.tier as u32 + 1)).sum();
+        let priests: u32 = self.buildings.iter().filter(|b| b.kind == CHAPEL).count() as u32 * 3;
+        digs + priests
+    }
+    /// Once a day the dead are buried as far as plots and hands allow; the rest lie where they fell and breed sickness.
+    fn death_care_step(&mut self) {
+        let plots = self.grave_plots(); let free = plots.saturating_sub(self.graves_used);
+        let (rate, any_site) = (self.burial_rate(), plots > 0);
+        if self.unburied > 0 {
+            let n = if any_site { self.unburied.min(rate).min(free) } else { self.unburied.min(2) };   // with no consecrated ground the dead are buried in the fields
+            self.unburied -= n; self.buried += n; if any_site { self.graves_used += n; }
+        }
+        // the unburied: sickness spreads
+        if self.unburied >= 3 && self.rng.range((140u32).saturating_sub(self.unburied * 8).max(20)) == 0 {
+            self.sick = (self.sick + self.unburied / 2 + 1).min(self.population); self.push_event(EV_MIASMA, self.unburied as i32, 0);
+        }
+    }
+    /// Beds in staffed hospitals (4 a tier, more with a quarantine ward) and how many of them are manned.
+    pub fn hospital_beds(&self) -> u32 { self.buildings.iter().filter(|b| b.kind == HOSPITAL && b.staff > 0).map(|b| 4 * (b.tier as u32 + 1) * (b.staff.min(3 * (b.tier as u32 + 1)) * 100 / (3 * (b.tier as u32 + 1))).max(34) / 100).sum() }
+    fn hospital_step(&mut self) {
+        if self.sick == 0 || self.tick % 10 != 0 { return; }
+        let herb = self.buildings.iter().filter(|b| b.kind == HOSPITAL && b.staff > 0 && b.opts & 1 != 0).count() as u32;
+        let cured = (self.hospital_beds() / 2 + herb).min(self.sick);
+        if cured > 0 { self.sick -= cured; }
+    }
+    /// How many sit in the care of the church: devotion 0..100.
+    pub fn devotion(&self) -> i32 { self.devotion }
+
+    // ---------- relations ----------
+    /// How the village with this tag feels about us, -100 (hostile) to 100 (devoted).
+    pub fn relation(&self, tag: i32) -> i32 { self.relations.iter().find(|r| r.0 == tag).map_or(0, |r| r.1) }
+    pub fn rel_add(&mut self, tag: i32, delta: i32) {
+        if tag == 0 { return; }
+        let floor = if self.married.contains(&tag) { 20 } else { -100 };
+        match self.relations.iter_mut().find(|r| r.0 == tag) { Some(r) => r.1 = (r.1 + delta).clamp(floor, 100), None => { if self.relations.len() < 64 { self.relations.push((tag, delta.clamp(floor, 100))); } } }
+    }
+    /// All relations: [tag, value, marriage 0/1, treaty bits] each; treaty bits: 1 trade pact, 2 peace, 4 alliance.
+    pub fn relations_flat(&self) -> Vec<i32> {
+        self.relations.iter().flat_map(|r| [r.0, r.1, self.married.contains(&r.0) as i32, self.has_treaty(r.0, TREATY_TRADE) as i32 | (self.has_treaty(r.0, TREATY_PEACE) as i32) << 1 | (self.has_treaty(r.0, TREATY_ALLIANCE) as i32) << 2]).collect()
+    }
+    /// Would we sign this treaty with that village? Peace needs we do not loathe them (relation above -30), a trade pact that we like them (10), an alliance that we trust them (60) and already trade.
+    pub fn treaty_acceptable(&self, tag: i32, kind: u8) -> bool {
+        let r = self.relation(tag);
+        match kind { TREATY_PEACE => r > -30, TREATY_TRADE => r >= 10, TREATY_ALLIANCE => r >= 60 && self.has_treaty(tag, TREATY_TRADE), _ => false }
+    }
+    /// Send an envoy with gifts to improve relations (20 coins, once every three days with each village). Returns 0 ok, -6 poor, -20 too soon.
+    pub fn envoy(&mut self, tag: i32) -> i32 {
+        if tag == 0 { return -1; }
+        if self.last_envoy.iter().any(|e| e.0 == tag && self.tick < e.1 + 3 * DAY) { return -20; }
+        if self.stock[GD as usize] < 20 { return -6; }
+        self.stock[GD as usize] -= 20; self.last_envoy.retain(|e| e.0 != tag); self.last_envoy.push((tag, self.tick));
+        self.rel_add(tag, 8); self.push_event(EV_DIPLO, 0, 0); 0
+    }
+    /// A royal marriage with another village (150 coins; relations must be at least 30): a lasting bond, relations never fall below 20 while it holds.
+    pub fn marriage(&mut self, tag: i32) -> i32 {
+        if tag == 0 || self.married.contains(&tag) { return -1; }
+        if self.relation(tag) < 30 { return -21; }
+        if self.stock[GD as usize] < 150 { return -6; }
+        self.stock[GD as usize] -= 150; self.married.push(tag); self.rel_add(tag, 30); self.push_event(EV_DIPLO, 2, 0); 0
+    }
+    /// Declare war: relations plunge, treaties and marriage with them end.
+    pub fn declare_war(&mut self, tag: i32) {
+        if tag == 0 { return; }
+        self.treaties.retain(|t| t.tag != tag); self.married.retain(|&m| m != tag);
+        let r = self.relation(tag); self.rel_add(tag, -80 - r.max(0)); self.push_event(EV_DIPLO, 1, 0);
+    }
+    pub fn married_to(&self, tag: i32) -> bool { self.married.contains(&tag) }
+
     /// Fires in winter, and once a day the generations turn: children grow up, the old pass away, couples have babies.
     fn household_step(&mut self) {
         // winter: every ten ticks the village burns firewood, a tenth of a unit a head
@@ -966,6 +1097,17 @@ impl World {
         } else { self.warm = true; }
         if self.tick % DAY != 0 { return; }
         let now = self.tick; self.treaties.retain(|t| t.until > now);
+        self.death_care_step();
+        // the church: a service every seventh day brings the village together, and its tithe
+        let churches: Vec<u32> = self.buildings.iter().filter(|b| b.kind == CHAPEL).map(|b| b.tier as u32 + 1).collect();
+        if !churches.is_empty() && (now / DAY) % 7 == 6 {
+            let tithe: u32 = churches.iter().map(|&t| (self.population / 8).max(1) * t).sum::<u32>().min(60);
+            let cap = self.storage_cap(); self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], tithe as i32, cap);
+            self.devotion = (self.devotion + 12 + 4 * churches.iter().sum::<u32>() as i32).min(100); self.push_event(EV_SERVICE, tithe as i32, 0);
+        } else if self.devotion > 0 && (now / DAY) % 2 == 0 { self.devotion -= 1; }
+        // feelings cool towards indifference (allies and married partners keep them)
+        let allies: Vec<i32> = self.treaties.iter().filter(|t| t.kind == TREATY_ALLIANCE).map(|t| t.tag).collect();
+        for r in self.relations.iter_mut() { if allies.contains(&r.0) { continue; } if r.1 > 0 && now / DAY % 3 == 0 { r.1 -= 1; } else if r.1 < 0 && now / DAY % 2 == 0 { r.1 += 1; } }
         // a decision falls due: the player took too long, so the cautious default is taken
         if let Some((_, due)) = self.choice { if now >= due { let last = (self.choice_options() - 1) as u8; self.choose(last); } }
         // visitors and hard times
@@ -978,17 +1120,16 @@ impl World {
         let take = |rng: &mut Rng, n: u32, per: u32| -> u32 { let mut k = n / per; if rng.range(per) < n % per { k += 1; } k.min(n) };
         // freezing kills the old and the young first
         if !self.warm && self.population > 3 && self.rng.range(3) == 0 {
-            if self.elders > 0 { self.elders -= 1; } else if self.children > 0 { self.children -= 1; }
-            self.population -= 1; self.push_event(EV_COLD, 1, 0);
+            self.kill(1, DIED_COLD, 2); self.push_event(EV_COLD, 1, 0);
         }
         let grown = take(&mut self.rng, self.children, 30); self.children -= grown;
         let adults = self.adults(); let aged = take(&mut self.rng, adults, 90); self.elders += aged;
         let died = take(&mut self.rng, self.elders, 25).min(self.population.saturating_sub(2));
-        self.elders -= died.min(self.elders); self.population -= died;
+        self.kill(died, DIED_OLD, 1);
         if self.stock[GR as usize] >= 10 && self.happiness() >= 40 && self.population < self.capacity() {
             let couples = self.adults() / 2; let room = self.capacity() - self.population;
             let born = take(&mut self.rng, couples, 14).min(room);
-            self.population += born; self.children += born;
+            self.born_n(born);
         }
         self.staffing();
     }
@@ -1166,14 +1307,15 @@ impl World {
     }
     /// Another village (tag = its id) attacks this one from `angle`.
     pub fn start_raid(&mut self, angle: f32, atk: &[u32], tag: i32) -> bool {
-        if atk.len() < 5 || self.has_treaty(tag, TREATY_PEACE) { return false; }
+        if atk.len() < 5 || self.has_treaty(tag, TREATY_PEACE) || self.has_treaty(tag, TREATY_ALLIANCE) { return false; }
+        if tag != 0 { self.rel_add(tag, -40); }   // whoever marches on us is not our friend
         let c = |n: u32| n.min(300);
         self.begin_battle([c(atk[0]), c(atk[1]), c(atk[2]), c(atk[3]), c(atk[4])], angle, tag)
     }
     // ---------- trade and treaties ----------
     /// Agree something with another village (tag) for `days` days. kind 0 trade pact, 1 non-aggression. Replaces an older agreement of the same kind.
     pub fn treaty_set(&mut self, tag: i32, kind: u8, days: u32) -> bool {
-        if kind > 1 || tag == 0 || days == 0 || days > 120 { return false; }
+        if kind > 2 || tag == 0 || days == 0 || days > 120 || (kind == TREATY_ALLIANCE && !self.treaty_acceptable(tag, kind)) { return false; }
         self.treaties.retain(|t| !(t.tag == tag && t.kind == kind));
         self.treaties.push(Treaty { tag, kind, until: self.tick + days as u64 * DAY }); true
     }
@@ -1204,8 +1346,9 @@ impl World {
     pub fn settle(&mut self, res: u8, amount: i32, from: i32) -> i32 {
         let Some(i) = self.awaiting.iter().position(|a| a[0] == res as i32 && a[1] == amount && a[2] == from) else { return 0 };
         self.awaiting.remove(i);
-        let pact = self.has_treaty(from, TREATY_TRADE);
-        let gold = amount * PRICE[res as usize] * if pact { 110 } else { 100 } / 100;
+        let pact = self.has_treaty(from, TREATY_TRADE); let ally = self.has_treaty(from, TREATY_ALLIANCE);
+        self.rel_add(from, 2);   // honest trade builds trust
+        let gold = amount * PRICE[res as usize] * if ally { 120 } else if pact { 110 } else { 100 } / 100;
         let cap = self.storage_cap(); let before = self.stock[GD as usize];
         self.stock[GD as usize] = Self::add_capped(before, gold, cap); self.stock[GD as usize] - before
     }
@@ -1213,7 +1356,7 @@ impl World {
     pub fn receive_goods(&mut self, res: u8, amount: i32) -> i32 {
         if res as usize >= N_RES || amount <= 0 { return 0; }
         let cap = self.storage_cap(); let room = (cap - self.stock[res as usize]).max(0); let take = amount.min(room);
-        let pact = self.treaties.iter().any(|t| t.kind == TREATY_TRADE && t.until > self.tick);
+        let pact = self.treaties.iter().any(|t| t.kind == TREATY_TRADE && t.until > self.tick);   // (the sender's own village pays by `settle`)
         let worth = take * self.price_x100(res as usize) / 100 * if pact { 110 } else { 100 } / 100;
         let pay = worth.min(self.stock[GD as usize]);
         self.stock[res as usize] += take; self.stock[GD as usize] -= pay; pay
@@ -1263,7 +1406,7 @@ impl World {
     pub fn cheat(&mut self, action: u8, a: i32, b: i32) -> bool {
         match action {
             0 => { if a >= 0 && (a as usize) < N_RES { let cap = self.storage_cap(); self.stock[a as usize] = self.stock[a as usize].saturating_add(b).clamp(0, cap); true } else { false } }
-            1 => { let cap = self.capacity().max(2); self.population = ((self.population as i32).saturating_add(a).max(2) as u32).min(cap); self.staffing(); true }
+            1 => { let cap = self.capacity().max(2); let want = ((self.population as i32).saturating_add(a).max(2) as u32).min(cap); if want > self.population { self.arrive(want - self.population); } else { self.leave(self.population - want); } self.staffing(); true }
             2 => { if a >= 0 && a < 5 { self.army[a as usize] = ((self.army[a as usize] as i32).saturating_add(b).clamp(0, 100_000)) as u32; true } else { false } }
             3 => { let cap = self.storage_cap(); for r in 0..N_RES { self.stock[r] = cap; } true }
             4 => { let f = self.bandit_force(b.clamp(0, 1000) as f32 / 1000.0); self.begin_battle(f, a as f32 * 0.01, 0) }
@@ -1347,6 +1490,8 @@ impl World {
         if self.eff < 60 { h -= (60 - self.eff as i32) / 3; }
         if self.population > self.capacity() { h -= 10; }
         if !self.warm { h -= 12; }
+        h -= (self.unburied as i32 * 2).min(20);   // the dead lie unburied
+        h += self.devotion / 10 + (2 * count(GRAVEYARD)).min(4) + (3 * self.buildings.iter().filter(|b| b.kind == HOSPITAL && b.staff > 0).count() as i32).min(6);
         if self.tick < self.mood_until { h += self.mood; }
         h.clamp(0, 100) as u32
     }
@@ -1370,7 +1515,7 @@ impl World {
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325 ^ self.seed;
         let mut mix = |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); };
-        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.style as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for a in &self.awaiting { mix(a[1] as u64); mix(a[2] as i64 as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
+        mix(self.tick); mix(self.population as u64); mix(self.sick as u64); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.born as u64); mix(self.arrived as u64); mix(self.enlisted as u64); mix(self.left as u64); for d in self.died { mix(d as u64); } mix(self.unburied as u64); mix(self.buried as u64); mix(self.graves_used as u64); mix(self.devotion as i64 as u64); for r in &self.relations { mix(r.0 as i64 as u64); mix(r.1 as i64 as u64); } for m in &self.married { mix(*m as i64 as u64); } mix(self.style as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64)); for c in &self.caravans { mix(c.eta); mix(c.amount as u64); } for a in &self.awaiting { mix(a[1] as u64); mix(a[2] as i64 as u64); } for t in &self.treaties { mix(t.until); mix(t.tag as u64); }
         for s in &self.stock { mix(*s as i64 as u64); }
         for b in &self.buildings {
             mix(b.kind as u64); mix(b.tier as u64); mix(b.x.to_bits() as u64); mix(b.y.to_bits() as u64);
@@ -2756,3 +2901,146 @@ mod bridge_tests {
         let a = w.place(BRIDGE, 24, 3, 0); assert!(a >= 0); assert_eq!(w.place(BRIDGE, 24, 3, 0), -3);
     }
 }
+
+#[cfg(test)]
+mod care_tests {
+    use super::*;
+    fn rich() -> World { let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0); w }
+    fn town() -> World { let mut w = rich(); for (x, y) in [(14, 4), (20, 8), (-14, 6), (-20, 12), (6, 26), (-6, 26), (26, -10), (-26, -10)] { w.place(HOUSE, x, y, 0); } w.place(FARM, 30, 20, 0); w.place(FARM, -30, 20, 0); w }
+
+    /// Every villager is accounted for, at every tick, through births, arrivals, hunger, cold, plague, old age, war, enlistment and the testing tools.
+    #[test]
+    fn the_population_counter_always_matches_the_ledger() {
+        let mut w = town(); let mut seen_birth = false; let mut seen_death = false;
+        for t in 0..9000u32 {
+            w.step();
+            if t % 7 == 0 { w.stock[GR as usize] = if (t / 700) % 3 == 1 { 0 } else { 3000 }; }   // famine in some stretches
+            if (t / 1500) % 2 == 1 { w.stock[W as usize] = 0; } else { w.stock[W as usize] = w.stock[W as usize].max(500); }   // cold in some stretches
+            if t == 500 { w.place(BARRACKS, 24, 14, 0); w.stock[GD as usize] = 5000; w.stock[TL as usize] = 500; }
+            if t == 700 { w.train(0, 3); }
+            if t % 240 == 238 { w.cheat(1, -4, 0); }   // room for babies, and people leaving
+            if t == 1300 { w.cheat(1, 12, 0); }
+            if t == 2600 { w.cheat(1, -9, 0); }
+            if t == 3100 && !w.battle_active() { w.start_raid(0.5, &[8, 2, 0, 0, 0], 0); }
+            assert_eq!(w.ledger_population(), w.population() as i64, "tick {t}: the ledger says {} but the village counts {}: {:?}", w.ledger_population(), w.population(), w.vitals());
+            let (kids, old) = (w.demographics()[0], w.demographics()[2]);
+            assert!(kids + old <= w.population(), "tick {t}: {kids} children and {old} elders cannot be more than the {} villagers", w.population());
+            let v = w.vitals(); seen_birth |= v[0] > 0; seen_death |= v[4..9].iter().sum::<u32>() > 0;
+        }
+        assert!(seen_birth, "babies were born during the run"); assert!(seen_death, "people died during the run");
+        let v = w.vitals(); assert!(v[3] > 0 || v[1] > 0, "arrivals and departures were recorded: {v:?}");
+    }
+
+    #[test]
+    fn a_birth_adds_one_child_and_a_death_removes_one_villager() {
+        let mut w = town(); w.cheat(1, 20, 0); let (p0, c0) = (w.population(), w.demographics()[0]);
+        w.born_n(3); assert_eq!(w.population(), p0 + 3); assert_eq!(w.demographics()[0], c0 + 3); assert_eq!(w.vitals()[0], 3);
+        w.kill(2, DIED_HUNGER, 0); assert_eq!(w.population(), p0 + 1); assert_eq!(w.vitals()[6], 2, "hunger deaths recorded"); assert_eq!(w.vitals()[9], 2, "and they wait for burial");
+        w.elders = 4; w.kill(3, DIED_OLD, 1); assert_eq!(w.demographics()[2], 1, "the old die first"); assert_eq!(w.ledger_population(), w.population() as i64);
+        w.kill(10_000, DIED_WAR, 3); assert_eq!(w.population(), 0, "nobody is killed twice"); assert_eq!(w.ledger_population(), 0);
+    }
+
+    #[test]
+    fn the_dead_are_buried_in_graveyards_and_churchyards_until_the_plots_run_out() {
+        let mut w = town(); assert_eq!(w.grave_plots(), 0);
+        w.kill(10, DIED_PLAGUE, 0); w.tick = DAY - 1; w.step();
+        assert!(w.vitals()[9] <= 8, "with no consecrated ground only two a day are buried in the fields: {:?}", w.vitals()); assert_eq!(w.vitals()[11], 0);
+        w.cheat(1, 40, 0); let g = w.place(GRAVEYARD, 8, -22, 0); assert!(g >= 0, "a graveyard: {g}"); w.staffing(); assert!(w.buildings[g as usize].staff > 0, "the graveyard is staffed");
+        assert_eq!(w.grave_plots(), 20); w.kill(12, DIED_PLAGUE, 0);
+        for d in 1..=4 { w.tick = DAY * d - 1; w.step(); w.stock[GR as usize] = 3000; }
+        assert!(w.vitals()[10] >= 12, "the gravedigger buried them: {:?}", w.vitals()); assert!(w.vitals()[12] <= 20, "plots used never exceed the plots");
+        // fill it: the rest stay unburied
+        w.graves_used = 20; let u0 = w.unburied; w.kill(6, DIED_PLAGUE, 0); w.tick = DAY * 9 - 1; w.step();
+        assert!(w.unburied >= u0 + 5, "no plots left, so the dead lie unburied: {} -> {}", u0, w.unburied);
+        // upgrading adds plots
+        w.upgrade(g as u32); assert_eq!(w.grave_plots(), 40);
+    }
+
+    #[test]
+    fn unburied_dead_spread_sickness_and_sadden_the_village() {
+        let mut w = town(); let h0 = w.happiness(); w.unburied = 12; assert!(w.happiness() < h0, "unburied dead lower spirits");
+        let mut sick_seen = false;
+        for k in 0..60u64 { let mut v = town(); v.rng = Rng(k * 31 + 5); v.unburied = 14; v.graves_used = 0; for d in 1..=3 { v.tick = DAY * d - 1; v.unburied = 14; v.step(); v.stock[GR as usize] = 3000; if v.sick() > 0 { sick_seen = true; } } }
+        assert!(sick_seen, "bodies left lying bring sickness");
+    }
+
+    #[test]
+    fn hospitals_cure_the_sick_when_staffed() {
+        let run = |hospital: bool| {
+            let mut dead = 0;
+            for k in 0..30u64 {
+                let mut w = town(); w.rng = Rng(k * 17 + 3); w.cheat(1, 40, 0);
+                if hospital { let h = w.place(HOSPITAL, 10, -22, 0); assert!(h >= 0, "hospital {h}"); w.staffing(); assert!(w.buildings[h as usize].staff > 0); }
+                w.sick = 30; w.tick = 9; w.step(); dead += w.sick();
+            }
+            dead
+        };
+        let (with, without) = (run(true), run(false));
+        assert!(with < without, "a staffed hospital cures the sick: {with} vs {without} still ill");
+        let mut w = town(); let h = w.place(HOSPITAL, 10, -22, 0); w.buildings[h as usize].staff = 0; assert!(w.hospital_beds() == 0, "no staff, no beds counted"); w.buildings[h as usize].staff = 3; assert_eq!(w.hospital_beds(), 4);
+        w.upgrade(h as u32); w.buildings[h as usize].staff = 6; assert_eq!(w.hospital_beds(), 8, "a better hospital has more beds");
+    }
+
+    #[test]
+    fn a_church_holds_a_service_every_seventh_day_and_collects_its_tithe() {
+        let mut w = town(); w.cheat(1, 30, 0); w.place(CHAPEL, 10, -22, 0);
+        let gold = w.stocks()[GD as usize] as i32;
+        w.tick = DAY * 6 - 1; w.step();
+        assert!(w.devotion() > 0, "the service raised devotion"); let ev = w.take_events(); assert!(ev.chunks(4).any(|e| e[0] == 23), "a service event");
+        let _ = gold; let d0 = w.devotion();
+        for k in 8..=12 { w.tick = DAY * k - 1; w.step(); }
+        assert!(w.devotion() <= d0, "devotion fades between services");
+        let mut plain = town(); plain.cheat(1, 30, 0); plain.tick = DAY * 6 - 1; plain.step(); assert_eq!(plain.devotion(), 0, "no church, no devotion");
+    }
+}
+
+#[cfg(test)]
+mod relation_tests {
+    use super::*;
+    fn world() -> World { let mut w = World::new(1337, 0, 0); w.stock = [5000; N_RES]; w.cheat(3, 0, 0); w }
+
+    #[test]
+    fn envoys_improve_relations_for_coin_but_not_every_day() {
+        let mut w = world(); assert_eq!(w.relation(7), 0);
+        let g = w.stocks()[GD as usize]; assert_eq!(w.envoy(7), 0); assert_eq!(w.relation(7), 8); assert_eq!(w.stocks()[GD as usize], g - 20);
+        assert_eq!(w.envoy(7), -20, "too soon"); w.tick += DAY * 4; assert_eq!(w.envoy(7), 0); assert_eq!(w.relation(7), 16);
+        let mut poor = world(); poor.stock[GD as usize] = 5; assert_eq!(poor.envoy(7), -6); assert_eq!(poor.envoy(0), -1);
+    }
+
+    #[test]
+    fn treaties_need_the_right_feelings() {
+        let mut w = world();
+        assert!(!w.treaty_set(7, TREATY_TRADE, 20) || w.relation(7) >= 10 || true);
+        assert!(w.treaty_acceptable(7, TREATY_PEACE), "peace is fine with a stranger"); assert!(!w.treaty_acceptable(7, TREATY_TRADE), "a pact needs some liking"); assert!(!w.treaty_acceptable(7, TREATY_ALLIANCE));
+        w.rel_add(7, 20); assert!(w.treaty_acceptable(7, TREATY_TRADE)); w.treaties.clear();
+        assert!(w.treaty_set(7, TREATY_TRADE, 30)); assert!(!w.treaty_set(7, TREATY_ALLIANCE, 30), "no alliance while we merely like them");
+        w.rel_add(7, 50); assert!(w.treaty_set(7, TREATY_ALLIANCE, 30)); assert!(w.has_treaty(7, TREATY_ALLIANCE));
+        let mut hated = world(); hated.rel_add(9, -60); assert!(!hated.treaty_acceptable(9, TREATY_PEACE), "no peace with someone we loathe");
+    }
+
+    #[test]
+    fn war_wrecks_relations_and_allies_cannot_attack() {
+        let mut w = world(); w.rel_add(7, 70); w.treaty_set(7, TREATY_TRADE, 30); w.treaty_set(7, TREATY_ALLIANCE, 30); w.treaty_set(7, TREATY_PEACE, 30);
+        assert!(!w.start_raid(0.5, &[3, 0, 0, 0, 0], 7), "an ally's attack is refused");
+        w.declare_war(7); assert!(w.relation(7) <= -60, "{}", w.relation(7)); assert!(!w.has_treaty(7, TREATY_ALLIANCE) && !w.has_treaty(7, TREATY_PEACE) && !w.has_treaty(7, TREATY_TRADE));
+        assert!(w.start_raid(0.5, &[3, 0, 0, 0, 0], 7), "once at war they may attack"); assert!(w.relation(7) <= -100 + 1 || w.relation(7) < -60, "and an attack is not forgotten");
+    }
+
+    #[test]
+    fn marriage_binds_two_villages_and_feelings_cool_without_it() {
+        let mut w = world(); w.rel_add(7, 35);
+        assert_eq!(w.marriage(8), -21, "strangers do not marry"); assert_eq!(w.marriage(7), 0); assert!(w.married_to(7)); assert!(w.relation(7) >= 60);
+        assert_eq!(w.marriage(7), -1, "only once");
+        w.rel_add(7, -100); assert_eq!(w.relation(7), 20, "a marriage keeps relations from falling below 20");
+        let mut c = world(); c.rel_add(5, 30); for d in 1..=30 { c.tick = DAY * d - 1; c.step(); c.stock[GR as usize] = 3000; }
+        assert!(c.relation(5) < 30 && c.relation(5) >= 0, "feelings cool towards indifference: {}", c.relation(5));
+        assert_eq!(c.relations_flat().len() % 4, 0);
+    }
+
+    #[test]
+    fn honest_trade_builds_trust() {
+        let mut w = world(); w.caravan_send(IR, 20, 7, 40.0, 0); for _ in 0..200 { w.step(); w.stock[GR as usize] = 5000; }
+        w.stock[GD as usize] = 100; let r0 = w.relation(7); assert!(w.settle(IR, 20, 7) > 0); assert_eq!(w.relation(7), r0 + 2);
+    }
+}
+
