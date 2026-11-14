@@ -54,3 +54,9 @@ What is missing is mostly *reasons to care between fights*: people are a number,
 4. Wall-walk combat and siege towers
 5. Neutral places, scouts and fog
 6. Performance and LOD in parallel with any of the above
+
+## Status of this plan
+
+Done, each in its own pull request on top of the last (see the PR list): 1 families, ages, seasons and firewood; 2 market prices, caravans and treaties (core only); 3 events with choices; 4 morale and routing (siege towers, rams, sapping and heroes are not done); 5 neutral places and fog of war (no button for visiting yet; scouts and toll posts not done); 7 the batch placement command and an economy regression test.
+
+Not done: 6 (free-form roads and districts, second tier of building options, village styles), terrain level of detail (needs checking in a real browser, which was off the table for these PRs), and the user interface for caravans and treaties.

@@ -127,6 +127,7 @@ function applyCmd(w: World, c: Cmd) {
     case 'bridge': w.drawbridge_set(c.idx!, (c.kind ?? 0) === 1); break;
     case 'option': w.set_option(c.idx!, c.kind ?? 0, (c.x ?? 1) === 1); break;
     case 'flatten': w.flatten(c.x ?? 60); break;
+    case 'batch': w.place_batch(Int32Array.from(c.units ?? [])); break;   // [kind, dx, dy, rot] per piece, rebuilt once
     case 'visit': w.visit_neutral(c.idx!); break;
     case 'choose': w.choose(c.kind ?? 0); break;
     case 'treaty': if ((c.y ?? 1) === 0) w.treaty_end(c.idx!, c.kind ?? 0); else w.treaty_set(c.idx!, c.kind ?? 0, c.x ?? 10); break;

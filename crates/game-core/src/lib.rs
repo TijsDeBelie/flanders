@@ -126,6 +126,7 @@ pub struct World {
     elders: u32,   // of the population: past working age
     neutral_done: Vec<bool>,      // neutral places already visited or cleared, by index into terrain::neutrals
     explored: Vec<u8>,            // fog of war: one cell per 40 units, 1 = seen
+    defer_roads: bool,            // inside place_batch: the path network is rebuilt once at the end
     choice: Option<(u8, u64)>,   // a decision waiting for the player: kind and the tick it is made for them
     mood: i32,                   // temporary lift (or drag) on happiness from the last decision
     mood_until: u64,
@@ -197,7 +198,7 @@ impl World {
     pub fn new(seed: u64, ox: i32, oy: i32) -> World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
-            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
+            buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, share_until: 0, caravans: vec![], treaties: vec![], warm: true, eff: 100, jobs: 0,
             events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], levels: vec![], roads: vec![], road_links: vec![], road_paths: vec![], road_cache: Default::default(),
             army: [0; 5], queue: [0; 5], train_prog: 0, away: [0; 5], battle: None, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, dets: vec![], next_det: 0, felled: vec![], bridges: vec![], map_ver: 0,
         };
@@ -338,6 +339,7 @@ impl World {
 
     /// Recompute derived data after the building list or tiers changed.
     fn after_change(&mut self) {
+        if self.defer_roads { self.staffing(); return; }
         self.rebuild_roads();
         self.staffing();
     }
@@ -561,6 +563,16 @@ impl World {
         }
         self.after_change();
         (self.buildings.len() - 1) as i32
+    }
+
+    /// Place many buildings in one go: [kind, dx, dy, rot] for each. Returns what `place` returns for each one. The path network is rebuilt once at the end instead of after every
+    /// piece, which makes a big build (a castle's walls, a moat) many times faster; every peer replays the same batch, so they stay in step.
+    pub fn place_batch(&mut self, flat: &[i32]) -> Vec<i32> {
+        self.defer_roads = true;
+        let out: Vec<i32> = flat.chunks_exact(4).take(400).map(|c| if c[0] < 0 || c[0] > 255 { -1 } else { self.place(c[0] as u8, c[1], c[2], (c[3] & 7) as u8) }).collect();
+        self.defer_roads = false;
+        self.after_change();
+        out
     }
 
     /// 0 ok, -1 invalid, -6 cannot afford, -10 max tier
@@ -2173,5 +2185,52 @@ mod neutral_tests {
         let (_, ax, ay) = first_of(1337, 0).unwrap(); let mut w = world();
         let before = w.neutrals_flat().len(); let id = army_at(&mut w, ax, ay, [5, 0, 0, 0, 0]); w.visit_neutral(id);
         assert!(w.neutrals_flat().len() > before || w.is_seen(ax, ay));
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    fn rich() -> World { let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0); w }
+    fn ring(r: f32, n: usize, kind: u8) -> Vec<i32> { (0..n).flat_map(|i| { let a = i as f32 / n as f32 * std::f32::consts::TAU; [kind as i32, (a.cos() * r).round() as i32, (a.sin() * r).round() as i32, 0] }).collect() }
+
+    #[test]
+    fn a_batch_builds_the_same_village_much_faster() {
+        let mut items = ring(24.0, 28, WALL); items.extend(ring(40.0, 44, WALL)); items.extend(ring(14.0, 8, HOUSE));
+        let mut one = rich(); let t = std::time::Instant::now();
+        for c in items.chunks(4) { one.place(c[0] as u8, c[1], c[2], c[3] as u8); }
+        let slow = t.elapsed();
+        let mut all = rich(); let t = std::time::Instant::now();
+        let res = all.place_batch(&items);
+        let fast = t.elapsed();
+        assert_eq!(res.len(), items.len() / 4);
+        assert_eq!(all.building_count(), one.building_count(), "the same buildings stand");
+        assert_eq!(all.roads_flat().len(), one.roads_flat().len(), "and the same paths");
+        println!("one by one {slow:?}, batch {fast:?}");
+        assert!(fast <= slow, "batch {fast:?} is not slower than {slow:?}");
+        // both are deterministic replays: two peers applying the same batch agree
+        let mut other = rich(); other.place_batch(&items);
+        assert_eq!(other.state_hash(), all.state_hash());
+        assert_eq!(rich().place_batch(&[999, 0, 0, 0]), vec![-1], "a bad kind is refused, not a crash");
+    }
+}
+
+/// A scripted opening, the way a careful player (or an agent) would start: this guards the economy against changes that make the first twenty minutes impossible.
+#[cfg(test)]
+mod opening_tests {
+    use super::*;
+    #[test]
+    fn a_sensible_opening_grows_the_village() {
+        let mut w = World::new(1337, 0, 0);
+        let mut put = |w: &mut World, kind: u8, spots: &[(i32, i32)]| spots.iter().any(|&(x, y)| w.place(kind, x, y, 0) >= 0);
+        assert!(put(&mut w, HOUSE, &[(12, 4), (14, 8), (-12, 6)]), "a first house");
+        assert!(put(&mut w, FARM, &[(22, -8), (-24, -8), (20, 20), (-22, 20)]), "a farm");
+        assert!(put(&mut w, FARM, &[(-24, -8), (22, -8), (-22, 20), (20, 20), (30, 6), (-32, 6)]), "a second farm");
+        put(&mut w, HOUSE, &[(18, 12), (-16, 10), (-14, -10)]); put(&mut w, WELL, &[(6, 10), (-6, 10)]);
+        // the first days, before the first bandits can come (they never raid before tick 600 and are rare after): the economy must carry a careful start
+        for _ in 0..(DAY * 5) { w.step(); if w.battle_active() { break; } }
+        assert!(w.population() >= 14, "the village grew: {}", w.population());
+        assert!(w.stocks()[GR as usize] > 100, "and is not starving: {} grain", w.stocks()[GR as usize]);
+        assert!(w.happiness() > 20, "people are not miserable: {}", w.happiness());
     }
 }
