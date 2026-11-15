@@ -3,6 +3,7 @@ import type { Terrain } from './terrain';
 import { buildCatapult, buildRam, HAT, TOOL, type Crowd, type Draw } from './crowd';
 import { smoothPath } from './field';
 import { lunge, fallen, mix } from './fight';
+import { moatLevelAt, standHeight, onWater, chase } from './wading';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const S = 10;
@@ -18,6 +19,7 @@ interface Field {
   moving: boolean; seed: number; elev: number; telev: number; fireT: number; lastCore: number;   // height it stands at (on a wall) and where that is heading
   sx: number; sz: number; segT: number; segD: number; lastSync: number;   // glide from where it was drawn to where the core put it, over the time one tick takes
   gait: number; spd: number;   // gait angle (advances with distance walked) and smoothed ground speed
+  gy: number; wade: boolean; wet: boolean;   // drawn height of the ground (or water) under its feet, chasing where that should be; wading (as the core says); out over the water on a raft
   flash: number; deadAt: number;   // seconds of hit flash left; when (army clock) the soldier fell, or -1 while standing
 }
 interface Post { kind: number; x: number; z: number; y: number; yaw: number; row: number; mode: 'drill' | 'tower' | 'patrol'; ring?: number; idx?: number; n?: number; R?: number;
@@ -161,17 +163,19 @@ export class ArmyView {
     }
     if (!this.battle) this.quiet = 2;   // a battle just appeared (or we just loaded): whatever was mid-swing in the core is not shown as a fresh attack
     this.battle = true;
-    while (this.field.length < n) { const i = this.field.length; this.field.push({ x: flat[i * 10 + 2], z: flat[i * 10 + 3], elev: 0, telev: 0, fireT: 0, lastCore: 0, tx: 0, tz: 0, yaw: 0, side: 0, kind: 0, alive: true, anim: 0, hp: 1, max: 1, moving: false, seed: i * 2.3, gait: i * 1.7, spd: 0, flash: 0, deadAt: -1, sx: flat[i * 10 + 2], sz: flat[i * 10 + 3], segT: 1, segD: 1, lastSync: this.t }); }
+    while (this.field.length < n) { const i = this.field.length; this.field.push({ x: flat[i * 10 + 2], z: flat[i * 10 + 3], elev: 0, telev: 0, fireT: 0, lastCore: 0, tx: 0, tz: 0, yaw: 0, side: 0, kind: 0, alive: true, anim: 0, hp: 1, max: 1, moving: false, gy: NaN, wade: false, wet: false, seed: i * 2.3, gait: i * 1.7, spd: 0, flash: 0, deadAt: -1, sx: flat[i * 10 + 2], sz: flat[i * 10 + 3], segT: 1, segD: 1, lastSync: this.t }); }
     for (let i = 0; i < n; i++) {
-      const f = this.field[i], o = i * 10; f.telev = flat[o + 9];
+      const f = this.field[i], o = i * 10;
       f.side = flat[o]; f.kind = flat[o + 1];
+      f.wade = f.side === 1 && flat[o + 9] > 0.02;   // (only attackers wade; the core's number for them is water depth, not a wall height: see update)
+      f.telev = f.wade ? 0 : flat[o + 9];
       if (Math.hypot(flat[o + 2] - f.tx, flat[o + 3] - f.tz) > 1e-3) { f.sx = f.x; f.sz = f.z; f.segT = 0; f.segD = f.segD * 0.6 + Math.max(0.05, Math.min(3, this.t - f.lastSync)) * 0.4; f.lastSync = this.t; }
       const prevHp = f.hp, wasAlive = f.alive;
       f.tx = flat[o + 2]; f.tz = flat[o + 3]; f.hp = flat[o + 4]; f.max = flat[o + 5]; f.alive = flat[o + 6] > 0;
       if (this.quiet === 0 && f.kind !== 4) {
         const died = wasAlive && !f.alive && f.hp <= 0;
         if (died) f.deadAt = this.t;
-        if (died || (f.alive && f.hp < prevHp - 0.01)) { f.flash = 0.3; this.onHit?.(f.tx, f.tz, this.terrain.walkAt(f.tx, f.tz) + 1.1 + f.telev, died); }
+        if (died || (f.alive && f.hp < prevHp - 0.01)) { f.flash = 0.3; this.onHit?.(f.tx, f.tz, this.terrain.walkAt(f.tx, f.tz) + 1.1 + Math.max(f.telev, f.wade ? moatLevelAt(this.moats, f.tx, f.tz) - this.terrain.walkAt(f.tx, f.tz) + 0.12 : 0), died); }
       } else if (!f.alive && f.hp <= 0 && f.deadAt < 0) f.deadAt = this.t - 5;   // already down when we first saw it
       if (this.quiet > 0) { f.anim = 0; f.fireT = 0; }
       else { f.anim = Math.max(f.anim, flat[o + 7]); if (f.kind === 4 && flat[o + 7] >= 0.3 && f.lastCore < 0.3) f.fireT = 1.0; }   // a catapult only swings its arm when it really has just fired
@@ -232,11 +236,23 @@ export class ArmyView {
       const gx = f.sx + (f.tx - f.sx) * k, gz = f.sz + (f.tz - f.sz) * k;
       const dx = f.tx - f.x, dz = f.tz - f.z; f.moving = (Math.hypot(dx, dz) > 0.12 || k < 1) && f.alive;
       const mx = (gx - f.x) * lp, mz = (gz - f.z) * lp, moved = Math.hypot(mx, mz);
-      f.x += mx; f.z += mz; f.anim = Math.max(0, f.anim - dt); f.elev += (f.telev - f.elev) * Math.min(1, dt * 5); f.fireT = Math.max(0, f.fireT - dt); f.flash = Math.max(0, f.flash - dt);
+      f.x += mx; f.z += mz; f.anim = Math.max(0, f.anim - dt); f.elev += (f.telev - f.elev) * Math.min(1, dt * 5); this.settle(f, dt); f.fireT = Math.max(0, f.fireT - dt); f.flash = Math.max(0, f.flash - dt);
       f.spd += ((moved / Math.max(dt, 0.001)) - f.spd) * Math.min(1, dt * 5);          // smoothed ground speed, so strides match how fast they really move
       f.gait += Math.PI * moved / (0.55 + 0.13 * f.spd);                               // one step per stride length: no sliding feet
     }
     this.corpses = this.corpses.filter(c => this.t - c.t < 40);
+  }
+
+  private height(f: Field) { return Number.isNaN(f.gy) ? this.terrain.walkAt(f.x, f.z) : f.gy; }
+
+  /** The moat water levels, World.moat_water_flat(): wading raiders stand on that surface. */
+  moats: Float32Array = new Float32Array(0);
+
+  /** Work out the height of the ground (or water) under a soldier and move the drawn height toward it at a limited speed. */
+  private settle(f: Field, dt: number) {
+    const ground = this.terrain.walkAt(f.x, f.z), level = f.side === 1 ? moatLevelAt(this.moats, f.x, f.z) : 0, want = standHeight(ground, f.wade, level);
+    f.gy = Number.isNaN(f.gy) ? want : chase(f.gy, want, dt);
+    f.wet = onWater(ground, f.wade, level);
   }
 
   private look(side: number, kind: number, seed: number, mine: boolean): Partial<Draw> {
@@ -254,7 +270,7 @@ export class ArmyView {
   private drawFallen(crowd: Crowd, f: Field) {
     if (f.kind === 4 || f.kind === 5) return;
     const l = this.look(f.side, f.kind, f.seed, false), since = f.deadAt >= 0 ? this.t - f.deadAt : 99;
-    crowd.add({ x: f.x, y: this.terrain.walkAt(f.x, f.z) + f.elev * (1 - fallen(since)), z: f.z, yaw: f.yaw, pose: 4, fall: fallen(since), phase: 0, skin: 0xd9a877, ...l, mounted: false, tool: undefined, shield: undefined } as Draw);
+    crowd.add({ x: f.x, y: this.height(f) + f.elev * (1 - fallen(since)), z: f.z, yaw: f.yaw, pose: 4, fall: fallen(since), phase: 0, skin: 0xd9a877, ...l, mounted: false, tool: undefined, shield: undefined } as Draw);
   }
 
   /** How high above the ground an archer shoots from at (x, z): up on the walkway if it stands in a tower. */
@@ -285,7 +301,7 @@ export class ArmyView {
         if (!f.alive && f.hp > 0) continue;   // ran off the field
         if (!near(f.x, f.z)) continue;
         if (!f.alive) { if (f.kind !== 4 && f.kind !== 5) this.drawFallen(crowd, f); continue; }
-        if (f.side === 1 && f.elev > 1.0 && f.kind !== 4) { const r = this.raftAt(nr++); r.visible = true; r.position.set(f.x, f.elev + this.terrain.walkAt(f.x, f.z) - 0.28 + Math.sin(t * 3.1 + f.seed) * 0.07, f.z); r.rotation.y = f.yaw + Math.PI / 2 + Math.sin(t * 2 + f.seed) * 0.12; r.rotation.z = Math.sin(t * 2.3 + f.seed * 2) * 0.14; r.rotation.x = Math.sin(t * 1.7 + f.seed * 3) * 0.08; }   // (a raft wallows: the raiders on it are helpless, see the core's WADE_* numbers)
+        if (f.wet && f.kind !== 4) { const r = this.raftAt(nr++); r.visible = true; r.position.set(f.x, this.height(f) - 0.28 + Math.sin(t * 3.1 + f.seed) * 0.07, f.z); r.rotation.y = f.yaw + Math.PI / 2 + Math.sin(t * 2 + f.seed) * 0.12; r.rotation.z = Math.sin(t * 2.3 + f.seed * 2) * 0.14; r.rotation.x = Math.sin(t * 1.7 + f.seed * 3) * 0.08; }   // (a raft wallows: the raiders on it are helpless, see the core's WADE_* numbers)
         if (f.kind === 5) { placeRam(f.x, f.z, f.yaw, Math.min(1, f.anim / 0.5)); continue; }
         if (f.kind === 4) { placeSiege(f.x, f.z, f.yaw, f.fireT, si++); continue; }
         const l = this.look(f.side, f.kind, f.seed, false);
@@ -296,7 +312,7 @@ export class ArmyView {
           if (tw) { const a = Math.atan2(f.z - tw.z, f.x - tw.x), R = (tw.keep ? KEEP_RING : TOWER_RING)[tw.tier], x = tw.x + Math.cos(a) * R, z = tw.z + Math.sin(a) * R; crowd.add({ x, y: this.terrain.walkAt(tw.x, tw.z) + (tw.keep ? KEEP_TOP : TOWER_TOP)[tw.tier], z, yaw: f.anim > 0 ? f.yaw : Math.PI / 2 - a, pose: 3, phase: t + f.seed, swing: f.anim > 0 ? Math.min(1, f.anim / 0.4) : 0, skin: 0xd9a877, ...l } as Draw); continue; }
         }
         const lg = f.kind !== 1 && f.kind !== 4 ? lunge(f.anim) : 0;   // a melee soldier steps into the blow
-        crowd.add({ x: f.x + Math.sin(f.yaw) * lg, y: this.terrain.walkAt(f.x, f.z) + f.elev, z: f.z + Math.cos(f.yaw) * lg, yaw: f.yaw, pose: f.anim > 0 ? 3 : f.moving ? 1 : 3, phase: f.anim > 0 || !f.moving ? t + f.seed : f.gait, speed: f.moving ? f.spd : 0, swing: f.anim > 0 ? Math.min(1, f.anim / 0.4) : 0, skin: 0xd9a877, scale: 0.92, ...l } as Draw);
+        crowd.add({ x: f.x + Math.sin(f.yaw) * lg, y: this.height(f) + f.elev, z: f.z + Math.cos(f.yaw) * lg, yaw: f.yaw, pose: f.anim > 0 ? 3 : f.moving ? 1 : 3, phase: f.anim > 0 || !f.moving ? t + f.seed : f.gait, speed: f.moving ? f.spd : 0, swing: f.anim > 0 ? Math.min(1, f.anim / 0.4) : 0, skin: 0xd9a877, scale: 0.92, ...l } as Draw);
       }
       for (const c of this.corpses) if (near(c.f.x, c.f.z)) this.drawFallen(crowd, c.f);
     } else {

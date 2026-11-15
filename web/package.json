@@ -10,7 +10,7 @@
     "build": "vite build",
     "share": "npm run build && vite preview",
     "test": "node --experimental-strip-types --test tests/penshapes.test.mjs tests/border.test.mjs tests/camerafx.test.mjs tests/flag.test.mjs tests/spanplan.test.mjs tests/validate.test.mjs tests/backup.test.mjs tests/ledger.test.mjs tests/tutorial.test.mjs tests/daycycle.test.mjs tests/worldname.test.mjs tests/trail.test.mjs tests/polyline.test.mjs tests/compass.test.mjs tests/fight.test.mjs tests/icons.test.mjs tests/defence.test.mjs tests/sync.test.mjs tests/journey.test.mjs tests/soldierspans.test.mjs",
-    "test:demo": "wasm-pack build ../crates/game-core --target nodejs --release --no-opt --out-dir ../../web/tests/.wasm && node -e \"require('fs').writeFileSync('tests/.wasm/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node --experimental-strip-types --test tests/demo.test.mjs tests/replay.test.mjs tests/desync.test.mjs tests/travel.test.mjs",
+    "test:demo": "wasm-pack build ../crates/game-core --target nodejs --release --no-opt --out-dir ../../web/tests/.wasm && node -e \"require('fs').writeFileSync('tests/.wasm/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node --experimental-strip-types --test tests/demo.test.mjs tests/replay.test.mjs tests/desync.test.mjs tests/travel.test.mjs tests/wading.test.mjs tests/models.test.mjs tests/options.test.mjs",
     "typecheck": "tsc --noEmit",
     "audit": "npm audit --omit=dev --audit-level=high",
     "wasm:release": "wasm-pack build ../crates/game-core --target web --release --out-dir ../../web/src/wasm"

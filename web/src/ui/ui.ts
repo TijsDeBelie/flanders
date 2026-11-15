@@ -235,7 +235,7 @@ export class UI {
     <p class="muted">For testing only. These actions are signed and sent to other players like any other command. They appear because you are running locally (or added <b>?cheats=1</b> to the address).</p>
     <div id="cheat-res" class="cheatgrid"></div>
     <div class="btnrow" style="flex-wrap:wrap">
-      <button class="pbtn" data-ch="3,0,0">Fill every store</button><button class="pbtn" data-ch="1,10,0">+10 villagers</button><button class="pbtn" data-ch="6,0,0">Cure plague</button>
+      <button class="pbtn" data-ch="3,0,0">Fill every store</button><button class="pbtn" data-ch="1,10,0">+10 villagers</button><button class="pbtn" data-ch="6,0,0">Cure plague</button><button class="pbtn" data-ch="9,0,0">Start plague</button>
     </div>
     <h3>Soldiers</h3><div class="btnrow" style="flex-wrap:wrap" id="cheat-army"></div>
     <h3>Village</h3><div class="btnrow"><button class="pbtn primary" data-ch="100,0,0">${bi('house')} Build a model village</button><button class="pbtn" data-ch="103,0,0" title="Every building at every tier, plus the design options">${bi('townhall')} Test hall: all buildings</button></div>
@@ -324,7 +324,7 @@ export class UI {
   }
 
   // ---- loading screen ----
-  private tips = ['Hunters keep the larder full if a forest is near.', 'Stone buildings shrug off fire; thatch does not.', 'Wells and chapels keep the plague away.', 'Paths appear on their own between your buildings.', 'Press V to reveal ore and stone deposits.', 'Your village keeps growing while you are away.', 'Walls link up by themselves when placed close together.'];
+  private tips = ['Hunters keep the larder full if a forest is near.', 'Stone buildings shrug off fire; thatch does not.', 'Wells and chapels keep the plague away. When it comes it lasts 10 to 20 days: it spreads, peaks and fades, and a hospital, a chapel, a graveyard and a quarantine save lives.', 'Paths appear on their own between your buildings.', 'Press V to reveal ore and stone deposits.', 'Your village keeps growing while you are away.', 'Walls link up by themselves when placed close together.'];
   beginLoading() { $('intro').hidden = true; $('loader').hidden = false; $('ltip').textContent = this.tips[Math.floor(Math.random() * this.tips.length)]; this.progress(1, 'Preparing the world…'); }
   progress(p: number, text: string) { ($('lbar-i') as HTMLElement).style.width = p + '%'; $('ltext').textContent = text; }
   private finishLoading() { ($('lbar-i') as HTMLElement).style.width = '100%'; const l = $('loader'); l.style.transition = 'opacity .5s'; l.style.opacity = '0'; setTimeout(() => { l.hidden = true; l.style.opacity = ''; l.style.transition = ''; }, 520); }

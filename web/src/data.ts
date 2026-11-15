@@ -71,7 +71,7 @@ export const DEPOSIT = [
 
 /** The decisions put to the player (see World.choose): a title, a line of story and the options. */
 export const CHOICES: { title: string; story: string; options: string[] }[] = [
-  { title: 'Plague in the village', story: 'The sick lie in every street. Your reeve asks what to do.', options: ['Quarantine the sick (they stop working for 5 days; fewer die)', 'Carry on as usual'] },
+  { title: 'Plague in the village', story: 'The sick lie in every street, and it will be days before the worst is over. Your reeve asks what to do.', options: ['Quarantine the sick (they stop working for 7 days; a lower peak, fewer die)', 'Carry on as usual'] },
   { title: 'A travelling preacher', story: 'A preacher with a worn cloak asks leave to speak in the square.', options: ['Welcome him (20 coins; spirits rise for 10 days)', 'Turn him away'] },
   { title: 'A noble visits', story: 'A knight with a small train asks for hospitality.', options: ['Hold a feast (100 grain, 30 coins; he leaves 90 coins)', 'Decline politely'] },
   { title: 'A hard winter', story: 'The first snow has fallen and the woodpiles are low.', options: ['Buy firewood (60 coins for 80 wood)', 'Share what there is (firewood lasts twice as long, people grumble)', 'Do nothing'] },

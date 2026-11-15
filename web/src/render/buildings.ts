@@ -109,6 +109,12 @@ class B {
   spin: THREE.Object3D[] = [];
   /** Parts that swing (a drawbridge deck): kept out of the merged mesh. */
   deck: THREE.Object3D[] = [];
+  /** Named groups of parts that an optional upgrade may take the place of (the roof a spire replaces), each with what an upgrade needs to know about it. */
+  slots = new Map<string, THREE.Group>();
+  slot(name: string, info: Record<string, number | string>, build: () => void) {
+    const outer = this.g, g = new THREE.Group(); g.userData.slot = name; g.userData.info = info;
+    this.g = g; build(); this.g = outer; outer.add(g); this.slots.set(name, g);
+  }
   constructor(public t: number, public banner: number, public flagDesign?: Flag) {}
   /** Bake cheap ambient occlusion into vertex colours: darker near the ground and on undersides (eaves, overhangs), lighter on top. */
   private shade(geo: THREE.BufferGeometry, baseY: number) {
@@ -295,7 +301,7 @@ const tower: Model = b => {
     for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.box(0.3, 5.2, 0.3, m.log, x, -0.2, z);
     b.box(2.9, 0.3, 2.9, m.wood, 0, 4.9, 0);
     for (const [x, z, w, d] of [[0, 1.4, 2.9, 0.15], [0, -1.4, 2.9, 0.15], [1.4, 0, 0.15, 2.9], [-1.4, 0, 0.15, 2.9]]) b.box(w, 0.9, d, m.wood, x, 5.2, z);
-    b.pyramid(3.6, 3.6, 1.6, m.thatch, 0, 6.8, 0);
+    b.slot('roof', { shape: 'pyramid', w: 3.6, y: 6.8, h: 1.6 }, () => b.pyramid(3.6, 3.6, 1.6, m.thatch, 0, 6.8, 0));
     for (const [x, z] of [[-1.3, -1.3], [1.3, -1.3], [-1.3, 1.3], [1.3, 1.3]]) b.box(0.15, 1.6, 0.15, m.log, x, 5.2, z);
     b.box(1.8, 1.9, 0.12, m.door, 0, 0, 0.98);                                            // boarded door between the front legs
     for (const s of [-0.35, 0.35]) b.box(0.08, 5.0, 0.08, m.darkwood, s, 0, 1.6);         // ladder up to the platform
@@ -304,14 +310,14 @@ const tower: Model = b => {
     b.cyl(1.7, 1.9, 4.6, m.stone, 0, -0.2, 0, 14); b.cyl(2.1, 2.1, 0.4, m.darkwood, 0, 4.2, 0, 14);
     parapet(1.95, 4.6, m.wood, 12);
     for (const [x, z] of [[-1.5, -1.5], [1.5, -1.5], [-1.5, 1.5], [1.5, 1.5]]) b.box(0.16, 1.8, 0.16, m.log, x, 4.6, z);
-    b.pyramid(4.4, 4.4, 1.7, m.tile, 0, 6.4, 0);
+    b.slot('roof', { shape: 'pyramid', w: 4.4, y: 6.4, h: 1.7 }, () => b.pyramid(4.4, 4.4, 1.7, m.tile, 0, 6.4, 0));
     door(2.0); b.window(0, 3.0, 1.74, 0, 0.3, 0.6);
   } else {
     const r = t === 2 ? 1.8 : 2.2, H = t === 2 ? 7.2 : 9;
     b.cyl(r, r + 0.35, H, m.stone, 0, -0.3, 0, 16); b.cyl(r + 0.35, r + 0.45, 0.5, m.darkstone, 0, H - 0.4, 0, 16);
     parapet(r + 0.3, H + 0.1, m.stone);
-    b.cyl(r * 0.6, r * 0.7, 1.2, m.stone, 0, H, 0, 12); b.cone(r * 0.75, 2.2, m.slate, 0, H + 1.2, 0, 12);   // a stair turret in the middle; the ring round it is the walkway
-    if (t === 3) b.flag(0, H + 3, 0, 2.2);
+    b.cyl(r * 0.6, r * 0.7, 1.2, m.stone, 0, H, 0, 12);   // a stair turret in the middle; the ring round it is the walkway
+    b.slot('roof', { shape: 'cone', r: r * 0.75, y: H + 1.2, h: 2.2, flag: t === 3 ? 1 : 0 }, () => { b.cone(r * 0.75, 2.2, m.slate, 0, H + 1.2, 0, 12); if (t === 3) b.flag(0, H + 3, 0, 2.2); });
     door(r + 0.3, 1.1, 2.1);
     for (const y of [3.6, 5.2]) b.window(0, y, r + 0.12, 0, 0.35, 0.8);
   }
@@ -368,7 +374,7 @@ const mine = (gold: boolean): Model => b => {
   const post = t >= 2 ? m.stone : m.darkwood;
   b.box(3.6, 0.5, 2.6, m.rock, 0, -0.2, -1.2);   // a shelf of spoil in front of the face, so the door is not left floating on a slope
   b.box(0.45, 2.4, 0.45, post, -1.1, 0, -1.9); b.box(0.45, 2.4, 0.45, post, 1.1, 0, -1.9); b.box(3, 0.5, 0.6, post, 0, 2.2, -1.9);
-  b.box(1.8, 1.9, 0.2, new THREE.MeshBasicMaterial({ color: 0x050505 }), 0, 0, -2.0);
+  b.box(1.8, 1.9, 0.2, new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 1 }), 0, 0, -2.0);
   for (let i = 0; i < 3; i++) b.box(0.18, 0.18, 1.2, m.iron, -0.3 + i * 0.3, 0.02, 2.5 + i * 0.5).visible = false;
   b.box(1.3, 0.7, 0.9, m.wood, 2, 0.25, 2.4, 0.4); for (const dx of [-0.4, 0.4]) b.cyl(0.25, 0.25, 0.1, m.iron, 2 + dx, 0.15, 2.9, 10).rotation.x = Math.PI / 2;
   const pile = gold ? m.goldPile : m.ironPile;
@@ -587,7 +593,7 @@ const townhall: Model = b => {
     // The Castle: a rectangular walled castle in the manner of Caerphilly or Harlech, not a square of four towers. A curtain wall 18 x 12 with round corner and side towers and a
     // twin-towered gatehouse at the front (+z); inside, a T-shaped palace (the great hall along the back wall, a wing running out towards the gate), a donjon rising behind it,
     // and the small buildings of a courtyard: chapel, stable, smithy, well. It fills the largest footprint of any building (see `footprint` in the core).
-    const W = 9, D = 6, wh = 5.0, black = new THREE.MeshBasicMaterial({ color: 0x0a0806 });
+    const W = 9, D = 6, wh = 5.0, black = new THREE.MeshStandardMaterial({ color: 0x0a0806, roughness: 1 });
     const merlons = (x0: number, z0: number, x1: number, z1: number, y: number, n: number) => { for (let i = 0; i < n; i++) { const f = (i + 0.5) / n; b.box(0.55, 0.7, 0.55, m.stone, x0 + (x1 - x0) * f, y, z0 + (z1 - z0) * f); } };
     b.box(W * 2 + 2.4, 3, D * 2 + 2.4, m.darkstone, 0, -3, 0);   // the foundation, deep enough to stand square on a slope
     // the curtain wall
@@ -942,35 +948,130 @@ function bake(g: THREE.Group, animated: Set<THREE.Object3D>) {
   }
 }
 
+/** A building's model in parts: the bare building (`base`), and one group for each optional upgrade that is switched on. Switching an upgrade on builds only its group; switching it off
+ *  removes only its group. An upgrade that changes the bare building (a spire takes the place of a tower's roof) swaps just the part it changes: the base keeps that part as a named slot
+ *  and gets it back when the upgrade goes. The groups are merged per material (see `bake`) separately, so the base's meshes are the same objects before and after. */
+export class BuildingModel {
+  readonly group = new THREE.Group();
+  readonly base: THREE.Group;
+  /** The groups of the upgrades that are on, by option bit. */
+  readonly parts = new Map<number, THREE.Group>();
+  private slots = new Map<string, THREE.Group>();
+  private detached = new Set<string>();
+  private ctx: OptionCtx;
+  private opts = 0;
+  private variant: number;
+
+  constructor(readonly kind: number, readonly tier: number, private banner = 0x2f5fa8, readonly seed = 0, private flag?: Flag, private baked = true) {
+    const b = new B(tier, banner, flag);
+    MODELS[kind](b);
+    b.g.updateMatrixWorld(true);
+    const solid: THREE.Box3[] = [], all = new THREE.Box3();
+    b.g.traverse(o => { const me = o as THREE.Mesh; if (me.isMesh) { const bb = new THREE.Box3().setFromObject(me); if (bb.max.y - bb.min.y > 0.3) solid.push(bb); } });
+    solid.forEach(x => all.union(x));
+    if (all.isEmpty()) all.set(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 1, 1));
+    this.variant = seed >= 0 ? ((seed % 4) + 4) % 4 : -1;
+    this.slots = b.slots;
+    this.ctx = { solid, all, cx: (all.min.x + all.max.x) / 2, cz: (all.min.z + all.max.z) / 2, hw: (all.max.x - all.min.x) / 2, hd: (all.max.z - all.min.z) / 2, reach: 0, top: all.max.y, seed, tier, opts: 0, slots: this.slots };
+    this.ctx.reach = Math.hypot(this.ctx.hw, this.ctx.hd);
+    for (const sl of this.slots.values()) b.g.remove(sl);   // each slot is merged on its own, so it can leave and come back
+    this.seal(b.g, b); for (const sl of this.slots.values()) this.seal(sl, b);
+    for (const sl of this.slots.values()) b.g.add(sl);
+    this.base = b.g; this.base.userData.part = 'base'; this.group.add(this.base);
+    this.group.userData.model = this;
+    this.refresh();
+  }
+
+  /** Variation, vertex colours and merging for a freshly built group of parts. */
+  private seal(g: THREE.Group, b: B) {
+    if (this.variant >= 0) applyVariant(g, this.variant);
+    g.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && m.geometry.attributes.position && !m.geometry.attributes.color) { const n = m.geometry.attributes.position.count; m.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3)); } });
+    if (this.baked) { const animated = new Set<THREE.Object3D>(); b.spin.forEach(o => o.traverse(c => animated.add(c))); b.deck.forEach(o => o.traverse(c => animated.add(c))); bake(g, animated); }
+    g.userData.smoke = b.smoke; g.userData.spin = b.spin.concat(b.deck);
+  }
+
+  private refresh() {
+    const smoke: THREE.Vector3[] = [], spin: THREE.Object3D[] = [];
+    for (const g of [this.base, ...this.parts.values()]) { smoke.push(...(g.userData.smoke as THREE.Vector3[])); spin.push(...(g.userData.spin as THREE.Object3D[])); }
+    this.group.userData.smoke = smoke; this.group.userData.spin = spin;
+  }
+
+  get options() { return this.opts; }
+
+  /** Make the upgrades that are on be exactly `next` (a bit mask). Returns the groups that were added (to be built up with the scaffold) and the ones taken away. */
+  setOptions(next: number): { added: THREE.Group[]; removed: THREE.Group[] } {
+    const added: THREE.Group[] = [], removed: THREE.Group[] = [], changed = this.opts ^ next, deps = DEPENDS[this.kind] ?? {}, repl = REPLACES[this.kind] ?? {};
+    if (!changed) return { added, removed };
+    let redo = changed;   // an upgrade whose look depends on one that changed is drawn again
+    for (let bit = 0; bit < 4; bit++) if ((next >> bit) & 1 && (deps[bit] ?? []).some(d => (changed >> d) & 1)) redo |= 1 << bit;
+    this.opts = next; this.ctx.opts = next;
+    for (let bit = 0; bit < 4; bit++) {
+      const g = this.parts.get(bit); if (!g || !((redo >> bit) & 1)) continue;
+      this.group.remove(g); g.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); }); this.parts.delete(bit); removed.push(g);
+    }
+    for (const [bit, slot] of Object.entries(repl)) {   // the slot is back in the base unless an upgrade that is still on replaces it
+      const on = Object.entries(repl).some(([k, sl]) => sl === slot && (next >> Number(k)) & 1), g = this.slots.get(slot)!;
+      if (!on && this.detached.has(slot)) { this.base.add(g); this.detached.delete(slot); }
+      void bit;
+    }
+    for (let bit = 0; bit < 4; bit++) {
+      if (!((next >> bit) & 1) || !((redo >> bit) & 1)) continue;
+      const b = new B(this.tier, this.banner, this.flag);
+      addOption(b, this.kind, bit, { ...this.ctx, solid: this.roomFor(bit) });
+      const g = b.g; g.userData.part = 'option'; g.userData.option = bit;
+      this.seal(g, b);
+      const slot = repl[bit]; if (slot && !this.detached.has(slot)) { this.base.remove(this.slots.get(slot)!); this.detached.add(slot); }
+      if (this.group.userData.charred) setCharred(g, true, Math.max(0, this.variant));
+      this.group.add(g); this.parts.set(bit, g); added.push(g);
+    }
+    this.refresh();
+    return { added, removed };
+  }
+
+  /** What stands in the way of upgrade `bit`: the bare building, and the room that every lower-numbered upgrade takes up whether it is on or not, so that two upgrades never grow
+   *  into each other and where an upgrade goes never depends on which others are on. */
+  private reserved = new Map<number, THREE.Box3[]>();
+  private roomFor(bit: number): THREE.Box3[] {
+    const solid = this.ctx.solid.slice();
+    for (let j = 0; j < bit; j++) {
+      let boxes = this.reserved.get(j);
+      if (!boxes) {
+        const b = new B(this.tier, this.banner, this.flag); addOption(b, this.kind, j, { ...this.ctx, solid: this.roomFor(j) }); b.g.updateMatrixWorld(true);
+        boxes = []; b.g.traverse(o => { const me = o as THREE.Mesh; if (me.isMesh) { const bb = new THREE.Box3().setFromObject(me); if (bb.max.y - bb.min.y > 0.3) boxes!.push(bb); } });
+        b.g.traverse(o => { (o as THREE.Mesh).geometry?.dispose(); });
+        this.reserved.set(j, boxes);
+      }
+      solid.push(...boxes);
+    }
+    return solid;
+  }
+
+  /** Free what the model still holds that is not in the scene (the slots that upgrades have taken out). */
+  dispose() { for (const slot of this.detached) this.slots.get(slot)?.traverse(o => { (o as THREE.Mesh).geometry?.dispose(); }); this.detached.clear(); }
+}
+
 export function buildModel(kind: number, tier: number, banner = 0x2f5fa8, seed = 0, opts = 0, flag?: Flag, baked = true) {
-  const b = new B(tier, banner, flag);
-  MODELS[kind](b);
-  addOptions(b, kind, opts, seed);
-  if (seed >= 0) applyVariant(b.g, ((seed % 4) + 4) % 4);
-  b.g.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && m.geometry.attributes.position && !m.geometry.attributes.color) { const n = m.geometry.attributes.position.count; m.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3)); } });
-  const animated = new Set<THREE.Object3D>(); b.spin.forEach(o => o.traverse(c => animated.add(c))); b.deck.forEach(o => o.traverse(c => animated.add(c)));
-  if (baked) bake(b.g, animated);
-  b.g.userData.smoke = b.smoke; b.g.userData.spin = b.spin.concat(b.deck);
-  return b.g;
+  const m = new BuildingModel(kind, tier, banner, seed, flag, baked);
+  m.setOptions(opts);
+  return m.group;
 }
 
 // ---------- optional design upgrades ----------
 /** Each building can take up to four optional upgrades (see the catalog) that change its look a little: a chimney, a banner, a barn, hoardings, turrets. Every extra is placed
  *  on a spot that is checked against what the building already has, so an addition never grows through a wall, a roof or another addition. */
-function addOptions(b: B, kind: number, opts: number, seed: number) {
-  if (!opts) return;
-  const m = M();
-  b.g.updateMatrixWorld(true);
-  const solid: THREE.Box3[] = [];
-  b.g.traverse(o => { const me = o as THREE.Mesh; if (me.isMesh) { const bb = new THREE.Box3().setFromObject(me); if (bb.max.y - bb.min.y > 0.3) solid.push(bb); } });
-  const all = new THREE.Box3(); solid.forEach(s => all.union(s));
-  if (all.isEmpty()) return;
-  const cx = (all.min.x + all.max.x) / 2, cz = (all.min.z + all.max.z) / 2, hw = (all.max.x - all.min.x) / 2, hd = (all.max.z - all.min.z) / 2, reach = Math.hypot(hw, hd);
-  let top = all.max.y;
+/** One optional upgrade of a building, drawn into its own group `b` (see BuildingModel). Where it goes is worked out from the bare building, never from the other upgrades, so each can be
+ *  added or taken away on its own and the result is the same whatever the order. */
+interface OptionCtx { solid: THREE.Box3[]; all: THREE.Box3; cx: number; cz: number; hw: number; hd: number; reach: number; top: number; seed: number; tier: number; opts: number; slots: Map<string, THREE.Group> }
+/** Which slot of the base model an option takes the place of, and which options an option's look depends on (it is drawn again when one of them is switched). */
+const REPLACES: Record<number, Record<number, string>> = { 3: { 2: 'roof' } };
+const DEPENDS: Record<number, Record<number, number[]>> = { 3: { 0: [2] } };
+function addOption(b: B, kind: number, bit: number, c: OptionCtx) {
+  const m = M(), { all, cx, cz, hw, hd, reach, seed } = c, solid = c.solid;
+  const top = c.top;
   /** A free spot (centre) for a w x d x h item standing on the ground at height y0: the first place on a widening spiral round the building that touches nothing. */
   const spot = (w: number, d: number, h: number, y0 = 0): [number, number] | null => {
     for (let k = 0; k < 90; k++) {
-      const a = seed * 0.83 + k * 0.62, rad = Math.max(hw, hd) * 0.55 + k * 0.1;
+      const a = seed * 0.83 + bit * 1.7 + k * 0.62, rad = Math.max(hw, hd) * 0.55 + k * 0.1;
       if (rad > reach * 1.25 + 2.2) break;
       const x = cx + Math.cos(a) * rad, z = cz + Math.sin(a) * rad, bb = new THREE.Box3(new THREE.Vector3(x - w / 2 - 0.12, y0, z - d / 2 - 0.12), new THREE.Vector3(x + w / 2 + 0.12, y0 + h, z + d / 2 + 0.12));
       if (solid.some(s => s.intersectsBox(bb))) continue;
@@ -986,7 +1087,7 @@ function addOptions(b: B, kind: number, opts: number, seed: number) {
   const footing = () => { b.box(hw * 2 + 0.5, 0.3, hd * 2 + 0.5, m.stone, cx, 0, cz); };
   const ring = (rad: number, y: number, h: number, mat: THREE.Material, n = 16) => { for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; const p = b.box(2 * Math.PI * rad / n + 0.1, h, 0.35, mat, cx + Math.cos(a) * rad, y, cz + Math.sin(a) * rad); p.rotation.y = -a + Math.PI / 2; } };
   const generic = (bit: number) => { if (bit === 0) pole(2.8); else if (bit === 1) { lantern(); lantern(); } else if (bit === 2) awning(); else if (bit === 3) footing(); };
-  const has = (bit: number) => (opts & (1 << bit)) !== 0;
+  const has = (n: number) => n === bit;
   switch (kind) {
     case 0: // house
       if (has(0)) b.chimney(cx - hw * 0.45, Math.max(1.2, top - 1.1), cz, 1.7, m.stone);
@@ -1008,13 +1109,31 @@ function addOptions(b: B, kind: number, opts: number, seed: number) {
         if (kind === 3) { const rr = [1.9, 2.3, 2.3, 2.7][b.t]; ring(rr, wt - 1.7, 1.1, m.wood, 20); ring(rr, wt - 0.6, 0.12, m.darkwood, 20); }
         else { const half = b.t === 0 ? 2.5 : ([5.2, 7.2, 8.4, 9.4][b.t] + 0.8) / 2 + 0.3, len = half * 2 - 0.4; for (const [x, z, rot] of [[0, half, 0], [0, -half, 0], [half, 0, 1], [-half, 0, 1]] as const) { const p1 = b.box(len, 1.1, 0.35, m.wood, x, wt - 1.7, z), p2 = b.box(len, 0.12, 0.45, m.darkwood, x, wt - 0.6, z); if (rot) { p1.rotation.y = p2.rotation.y = Math.PI / 2; } } }
       }
-      if (kind === 3 && bit(2)) { b.cone(0.42, 2.6, m.slate, cx, top - 0.05, cz, 10); b.sphere(0.16, m.gold, cx, top + 2.6, cz); top += 2.7; }   // a spire on the roof
+      if (kind === 3 && bit(2)) {   // a spire takes the place of the roof: the same footing, but steep and tall, ending in a gilded tip
+        const info = c.slots.get('roof')?.userData.info as { shape: string; w?: number; r?: number; y: number; h: number; flag?: number } | undefined;
+        if (info) {
+          const h2 = info.h * 2.4 + 1.2, apex = info.y + h2;
+          if (info.shape === 'pyramid') b.pyramid(info.w!, info.w!, h2, m.slate, 0, info.y, 0); else b.cone(info.r!, h2, m.slate, 0, info.y, 0, 12);
+          b.cone(0.1, 0.7, m.gold, 0, apex - 0.2, 0, 6); b.sphere(0.2, m.gold, 0, apex - 0.28, 0);
+          if (info.flag) b.flag(0, apex + 0.3, 0, 2.2);   // (a great tower flies its flag from the spire)
+        }
+      }
       if (kind === 26 && bit(2)) {
         if (b.t < 2) for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const tx = cx + sx * (hw - 0.2), tz = cz + sz * (hd - 0.2); b.cyl(1.0, 1.1, top + 0.8, m.stone, tx, 0, tz, 12); b.cone(1.3, 1.9, m.slate, tx, top + 0.8, tz, 12); }
         else { const w = [5.2, 7.2, 8.4, 9.4][b.t], wt = [6.4, 8.9, 11.5, 14.1][b.t]; for (const [tx, tz] of [[w / 2 + 0.45, 0], [-w / 2 - 0.45, 0], [0, w / 2 + 0.45], [0, -w / 2 - 0.45]] as const) { b.cyl(0.75, 0.85, wt - 0.6, m.stone, tx, -0.3, tz, 10); b.cone(1.0, 1.5, m.slate, tx, wt - 0.9, tz, 10); } }   // the corners already have towers: these stand halfway along each wall
       }
-      if (bit(0)) b.flag(cx, top, cz, 2.6);
-      if (bit(3)) { b.cyl(0.35, 0.22, 0.4, m.iron, cx + (bit(0) ? 1.0 : 0), top, cz, 8); b.cone(0.28, 0.6, m.glow, cx + (bit(0) ? 1.0 : 0), top + 0.4, cz, 8); }
+      if (bit(0)) {
+        if (kind === 3) {   // the standard flies from the highest point: the roof's apex, or the tip of the spire when there is one
+          const info = c.slots.get('roof')?.userData.info as { y: number; h: number } | undefined, spire = (c.opts & 4) !== 0;
+          if (info) b.flag(0, info.y + (spire ? info.h * 2.4 + 1.2 : info.h) - 0.1, 0, 2.6);
+        } else b.flag(cx, top, cz, 2.6);
+      }
+      if (bit(3)) {
+        if (kind === 3) {   // fire baskets on the walkway, under the eaves
+          const wt = [5.2, 4.6, 7.3, 9.1][b.t], rho = [1.0, 1.5, 1.5, 1.85][b.t];
+          for (const a of [0.9, 0.9 + Math.PI]) { const x = Math.cos(a) * rho, z = Math.sin(a) * rho; b.cyl(0.3, 0.2, 0.4, m.iron, x, wt, z, 8); b.cone(0.26, 0.55, m.glow, x, wt + 0.4, z, 8); }
+        } else { b.cyl(0.35, 0.22, 0.4, m.iron, cx + 1.0, top, cz, 8); b.cone(0.28, 0.6, m.glow, cx + 1.0, top + 0.4, cz, 8); }
+      }
       break;
     }
     case 19: // barracks
@@ -1096,7 +1215,7 @@ class Smoke {
 }
 
 // ---------- scene sync ----------
-interface Item { sig: string; group: THREE.Group; status: number; pop?: number; cell: string; build?: Construction }
+interface Item { sig: string; opt: number; model?: BuildingModel; group: THREE.Group; status: number; pop?: number; cell: string; build?: Construction }
 
 /** A building going up: it is cut into storeys that rise out of the ground one after another as the builders get to them, inside a scaffold that climbs with them. Purely visual: the
  *  building exists in the game at once. */
@@ -1153,17 +1272,24 @@ export class VillageView {
     const n = flat.length / 10, clear: { x: number; z: number; r: number }[] = [];
     for (let i = 0; i < n; i++) {
       const [kind, tier, x, z, rot, pad, status] = [flat[i * 10], flat[i * 10 + 1], flat[i * 10 + 2], flat[i * 10 + 3], flat[i * 10 + 4], flat[i * 10 + 5], flat[i * 10 + 6]];
-      const opt = options?.[i] ?? 0, sig = `${kind}:${tier}:${x}:${z}:${rot}:${opt}`;
+      const opt = options?.[i] ?? 0, sig = `${kind}:${tier}:${x}:${z}:${rot}`;
       let it = this.items.get(i);
-      const prevTier = it && it.sig.split(':')[0] === String(kind) && it.sig.split(':')[2] === String(x) ? 1 : 0;   // (same building, new tier or option: an upgrade, built a little quicker)
-      if (!it || it.sig !== sig) {
+      const prevTier = it && it.sig.split(':')[0] === String(kind) && it.sig.split(':')[2] === String(x) ? 1 : 0;   // (same building, new tier: an upgrade, built a little quicker)
+      if (it && it.sig === sig && it.opt !== opt && it.model) {
+        // only the optional upgrades changed: the bare building stays as it is, and only the new item is built (and drawn up with its own scaffold)
+        this.touch(it.cell); this.endBuild(it);
+        const { added } = it.model.setOptions(opt); it.opt = opt;
+        for (const g of added) if (this.animateNew && !NO_SCAFFOLD.has(kind)) { it.build = this.startBuild(it.group, radii[kind] ?? 3, tier, true, g); break; }
+      } else if (!it || it.sig !== sig) {
         if (it) { this.touch(it.cell); this.endBuild(it); this.dispose(it.group); }
         // walls are drawn by the Walls renderer as one connected structure; keep an empty placeholder so indices line up
-        const g = PLAIN.has(kind) ? Object.assign(new THREE.Group(), { userData: { smoke: [], spin: [] } }) : buildModel(kind, tier, this.banner, Math.floor(Math.abs(x * 7.3 + z * 13.1)), opt, this.flag);
+        const model = PLAIN.has(kind) ? undefined : new BuildingModel(kind, tier, this.banner, Math.floor(Math.abs(x * 7.3 + z * 13.1)), this.flag);
+        model?.setOptions(opt);
+        const g = model ? model.group : Object.assign(new THREE.Group(), { userData: { smoke: [], spin: [] } });
         g.userData.variant = Math.floor(Math.abs(x * 7.3 + z * 13.1)) % 4;
         g.position.set(x, pad, z); g.rotation.y = rot * Math.PI / 4;
         g.userData.idx = i; g.userData.kind = kind;
-        this.root.add(g); it = { sig, group: g, status, cell: cellOf(x, z) };
+        this.root.add(g); it = { sig, opt, model, group: g, status, cell: cellOf(x, z) };
         this.items.set(i, it); this.touch(it.cell);
         if (this.animateNew) { if (NO_SCAFFOLD.has(kind) || PLAIN.has(kind)) { g.scale.setScalar(0.02); it.pop = 0; } else it.build = this.startBuild(g, radii[kind] ?? 3, tier, !!prevTier); }
       }
@@ -1179,10 +1305,10 @@ export class VillageView {
   }
 
   /** Cut a new model into storeys and put a scaffold round it: see `Construction`. */
-  private startBuild(g: THREE.Group, r: number, tier: number, upgrade: boolean): Construction {
+  private startBuild(g: THREE.Group, r: number, tier: number, upgrade: boolean, scope: THREE.Object3D = g): Construction {
     g.updateMatrixWorld(true);
     const inv = new THREE.Matrix4().copy(g.matrixWorld).invert(), box = new THREE.Box3(), all = new THREE.Box3(), meshes: THREE.Mesh[] = [];
-    g.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && m.visible) { box.setFromObject(m); if (!box.isEmpty()) { all.union(box); meshes.push(m); } } });
+    scope.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && m.visible) { box.setFromObject(m); if (!box.isEmpty()) { all.union(box); meshes.push(m); } } });
     const top = Math.max(1.5, all.max.y - g.position.y), w = Math.max(2.2, all.max.x - all.min.x), d = Math.max(2.2, all.max.z - all.min.z);
     const n = Math.max(3, Math.min(14, Math.ceil(top / 1.4))), bandH = top / n, bandOf = (y: number) => Math.max(0, Math.min(n - 1, Math.floor(y / bandH)));
     const bands = Array.from({ length: n }, (_, k) => ({ holder: new THREE.Group(), y0: k * bandH, shown: false, grow: 0 }));
@@ -1291,7 +1417,7 @@ export class VillageView {
     for (const m of c.merged) { this.batchRoot.remove(m); m.geometry.dispose(); }
     this.cells.delete(cell);
   }
-  private dispose(g: THREE.Group) { this.root.remove(g); g.traverse(o => { const m = o as THREE.Mesh; if (m.geometry) m.geometry.dispose(); }); }
+  private dispose(g: THREE.Group) { (g.userData.model as BuildingModel | undefined)?.dispose(); this.root.remove(g); g.traverse(o => { const m = o as THREE.Mesh; if (m.geometry) m.geometry.dispose(); }); }
   groupOf(i: number) { return this.items.get(i)?.group; }
   pick(ray: THREE.Raycaster): number | null { return this.pickHit(ray)?.idx ?? null; }
   pickHit(ray: THREE.Raycaster): { idx: number; d: number } | null {
@@ -1314,7 +1440,7 @@ export class Effects {
     for (const view of views) for (const g of view.root.children) {
       const sp: THREE.Object3D[] = g.userData.spin;
       for (const o of sp) {
-        if (o.parent === g || o.parent?.parent === g) {
+        if (o.parent === g || o.parent?.parent === g || o.parent?.parent?.parent === g) {
           if (o.userData.deck) { o.rotation.x += ((drawnUp(g.userData.status, view.raised) ? -1.3 : 0) - o.rotation.x) * (1 - Math.exp(-dt * 2)); continue; }
           if ((o as THREE.Mesh).geometry && (o as THREE.Mesh).geometry.type === 'PlaneGeometry') o.rotation.y = Math.sin(t * 3 + g.position.x) * 0.25;
           else o.rotation.z += dt * 0.5 * (g.userData.status === 0 || g.userData.kind === 1 ? 1 : 0.15);

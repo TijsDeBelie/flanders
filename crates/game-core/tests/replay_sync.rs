@@ -6,7 +6,7 @@ use game_core::World;
 #[derive(Clone, Debug)]
 enum C {
     Place(u8, i32, i32, u8), Upgrade(u32), Demolish(u32), Train(u8, u32), Cheat(u8, i32, i32), Form([u32; 5]), March(u32, f32, f32), Recall(u32), Halt(u32),
-    Link(f32, f32), Bridge(u32, bool), Gate(u32, bool), Raid(f32, [u32; 5], i32), Batch(Vec<i32>), Split(u32, [u32; 5]), Defend(u32),
+    Link(f32, f32), Bridge(u32, bool), Gate(u32, bool), Raid(f32, [u32; 5], i32), Batch(Vec<i32>), Split(u32, [u32; 5]), Defend(u32), Choose(u8),
     Rel(i32, i32), Journey(u8, i32, i32, f32), Caravan(u8, i32, i32, f32, u32),
 }
 
@@ -28,6 +28,7 @@ fn apply(w: &mut World, c: &C) {
         C::Batch(v) => { w.place_batch(v); }
         C::Split(id, u) => { w.det_split(*id, u); }
         C::Defend(id) => { w.det_defend(*id); }
+        C::Choose(o) => { w.choose(*o); }
         C::Rel(t, d) => { w.rel_add(*t, *d); }
         C::Journey(k, t, a, d) => { w.journey_start(*k, *t, *a, *d); }
         C::Caravan(r, a, t, d, e) => { w.caravan_send(*r, *a, *t, *d, *e); }
@@ -199,4 +200,29 @@ fn a_moat_a_lent_drawbridge_and_a_defending_army_replay_identically() {
     r("silent", replay(1337, 0, 0, &log, &hashes, &mut |_, _| {}));
     r("drawn every tick", replay(1337, 0, 0, &log, &hashes, &mut |w, _| { look(w); }));
     r("drawn now and then", replay(1337, 0, 0, &log, &hashes, &mut |w, t| if t % 5 == 2 { look(w); }));
+}
+
+/// A plague runs for many days, so a copy that joins late or replays with other habits must follow it through every wave to the same village, tick by tick: the spread, the deaths,
+/// the quarantine the owner chose and the end of it. (Plague deaths and the sick are in the hash.)
+#[test]
+fn a_plague_replays_to_the_same_state_through_every_wave() {
+    game_core::warm_navigation(1337);
+    let mut w = World::new(1337, 0, 0); let (mut log, mut hashes): (Vec<(u64, C)>, Vec<u64>) = (vec![], vec![]);
+    let issue = |w: &mut World, log: &mut Vec<(u64, C)>, c: C| { apply(w, &c); log.push((w.tick(), c)); };
+    issue(&mut w, &mut log, C::Cheat(3, 0, 0));
+    for (i, (x, y)) in [(14, 4), (20, 8), (-14, 6), (-20, 12), (6, 26), (-6, 26), (26, -10), (-26, -10)].iter().enumerate() { issue(&mut w, &mut log, C::Place(if i == 4 { 1 } else { 0 }, *x, *y, 0)); }
+    issue(&mut w, &mut log, C::Place(17, 4, 14, 0)); issue(&mut w, &mut log, C::Place(16, -4, 14, 0));
+    issue(&mut w, &mut log, C::Cheat(1, 40, 0)); issue(&mut w, &mut log, C::Cheat(2, 0, 30));
+    let mut seen_sick = 0;
+    for t in 0..(14 * 240u64) {
+        if t % 20 == 0 { issue(&mut w, &mut log, C::Cheat(3, 0, 0)); }
+        if t == 60 { issue(&mut w, &mut log, C::Cheat(9, 0, 0)); }                    // the outbreak
+        if t == 300 { issue(&mut w, &mut log, C::Choose(0)); }                        // quarantine, a few days late is still allowed
+        if t == 1500 { issue(&mut w, &mut log, C::Cheat(6, 0, 0)); }                  // an abbey's cure ends it early on one copy of the story
+        w.step(); hashes.push(w.state_hash()); seen_sick = seen_sick.max(w.sick());
+    }
+    assert!(seen_sick >= 3, "there was a plague to follow ({seen_sick} ill at most)");
+    for (what, r) in [("silent", replay(1337, 0, 0, &log, &hashes, &mut |_, _| {})), ("drawn every tick", replay(1337, 0, 0, &log, &hashes, &mut |w, _| { look(w); })), ("drawn now and then", replay(1337, 0, 0, &log, &hashes, &mut |w, t| if t % 7 == 3 { look(w); }))] {
+        if let Some((t, c)) = r { panic!("plague replay ({what}) diverged at tick {t} after {c} of {} commands", log.len()); }
+    }
 }

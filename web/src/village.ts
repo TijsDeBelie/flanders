@@ -176,6 +176,7 @@ export class Village {
     this.syncField();
     const fighting = w.battle_active();
     if (fighting) this.army.foe = pickFoe(this.army.friend, this.foeColor(w.battle_tag()) ?? 0x4a3a2a);
+    this.army.moats = w.moat_water_flat();
     this.army.syncBattle(fighting ? w.battle_units_flat() : new Float32Array(0));
     this.army.syncSiegeWorks(fighting ? w.battle_ladders_flat() : new Float32Array(0), fighting ? w.battle_bridges_flat() : new Float32Array(0));
     this.people.hidden = fighting; this.view.raised = fighting;
