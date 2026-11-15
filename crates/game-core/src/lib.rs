@@ -3615,7 +3615,7 @@ mod care_tests {
     fn hospitals_cure_the_sick_when_staffed() {
         let run = |hospital: bool| {
             let mut dead = 0;
-            for k in 0..24u64 {   // (more runs than once: a raid in those six days changes by chance who dies, and a tie must not decide the test)
+            for k in 0..40u64 {
                 let mut w = town(); w.rng = Rng(k * 17 + 3); w.cheat(1, 40, 0);
                 if hospital { let h = w.place(HOSPITAL, 10, -22, 0); assert!(h >= 0, "hospital {h}"); w.staffing(); assert!(w.buildings[h as usize].staff > 0); }
                 let p0 = w.population; w.start_plague(); w.tick = (w.tick / 24 + 1) * 24;

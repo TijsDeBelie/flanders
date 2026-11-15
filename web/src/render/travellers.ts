@@ -204,7 +204,7 @@ export class Travellers {
         }
         case 'courier': {   // a rider with a sealed scroll in his hand and the sender's banner behind him
           p({ mounted: true, body: color, hat: HAT.CAP, legs: 0x3a3a40 });
-          this.prim('cyl', f, k, 0.42, 1.78, 0.5, 0.12, 0.6, 0xf0e6c8, Math.PI / 2 - 0.2, 0, 0); this.prim('ball', f, k, 0.42, 1.77, 0.8, 0.17, 0.17, 0.17, RED);
+          this.prim('cyl', f, k, 0.42, 1.78, 0.5, 0.12, 0.6, 0.12, 0xf0e6c8, Math.PI / 2 - 0.2, 0, 0); this.prim('ball', f, k, 0.42, 1.77, 0.8, 0.17, 0.17, 0.17, RED);
           this.flag(f, k, -0.3, -0.7, 4.6, 1.6, 1.0, color, sd, GOLD);
           break;
         }
@@ -217,7 +217,7 @@ export class Travellers {
         }
         case 'olive': {
           p({ body: 0xe8e4d4, hat: HAT.COIF, legs: 0xd8d4c8 });
-          this.prim('cyl', f, k, 0.45, 1.1, 0.4, 0.05, 1.1, 0x6a4a2a, 0.6, 0, 0);
+          this.prim('cyl', f, k, 0.45, 1.1, 0.4, 0.05, 1.1, 0.05, 0x6a4a2a, 0.6, 0, 0);
           for (let q = 0; q < 7; q++) { const a = q / 6; this.prim('ball', f, k, 0.45 + (q % 2 ? 0.14 : -0.14), 1.2 + a * 0.55, 0.32 + a * 0.5, 0.2, 0.1, 0.34, q % 2 ? 0x8aa84a : 0x5f8a34, 0.5, 0, 0.3); }
           break;
         }
