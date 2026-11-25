@@ -2034,6 +2034,8 @@ interface BuildingBatch {
   merged: THREE.Mesh[];
   bounds: THREE.Box3;
   detail: boolean;
+  /** Seen from far away: the houses of the square are drawn as the simple proxies of `farHouses` instead of their models. */
+  far: boolean;
 }
 
 /** A building going up: it is cut into storeys that rise out of the ground one after another as the builders get to them, inside a scaffold that climbs with them. Purely visual: the
@@ -2067,6 +2069,50 @@ const NO_SCAFFOLD = new Set([2, 21, 22, 24, 32, 33, 34, 37, 38, 23]);
 /** Static parts are merged per square of this many units, so a change re-merges one square (not the whole village) and the GPU can skip squares that are off screen. */
 const CELL = 36;
 const cellOf = (x: number, z: number) => `${Math.floor(x / CELL)}:${Math.floor(z / CELL)}`;
+
+/** Beyond this many times the detail range a square draws its houses as simple proxies (`farHouses`). */
+const FAR_RANGE = 1.8;
+/** What a house looks like from far away, as colours: the walls and the roof of each tier (the average of their textures). */
+const FAR_HOUSE_COLOURS: [number, number][] = [[0xa58a62, 0xb89952], [0xcdbf9f, 0xaa5536], [0xa8553a, 0x515c6b], [0xa8553a, 0x515c6b]];
+let farHouseMat: THREE.MeshStandardMaterial | undefined;
+const farHouseGeos: (THREE.BufferGeometry | undefined)[] = [];
+/** One house as walls (a box) and a gable roof (a prism): 18 triangles, in the model's own frame, with its colours in the vertices. */
+function farHouseGeometry(t: number): THREE.BufferGeometry {
+  let geo = farHouseGeos[t]; if (geo) return geo;
+  const { w, d, rx, eaveY, h, e, len, ridgeY } = houseGeo(t), pos: number[] = [], col: number[] = [];
+  const [wallHex, roofHex] = FAR_HOUSE_COLOURS[t] ?? FAR_HOUSE_COLOURS[0], wall = new THREE.Color(wallHex), roof = new THREE.Color(roofHex);
+  const box = new THREE.BoxGeometry(w, eaveY, d).translate(0, eaveY / 2, 0).toNonIndexed(), bp = box.attributes.position;
+  for (let i = 0; i < bp.count; i++) { pos.push(bp.getX(i), bp.getY(i), bp.getZ(i)); col.push(wall.r, wall.g, wall.b); }
+  box.dispose();
+  // the roof: the ridge runs along x (rx) or z, the eaves hang `e` to each side of it and the ends stand at the walls
+  const L = len / 2, P = (a: number, y: number, c: number): [number, number, number] => rx ? [a, y, c] : [c, y, a];
+  const [a0, a1, b0, b1, r0, r1] = [P(-L, eaveY, -e), P(L, eaveY, -e), P(-L, eaveY, e), P(L, eaveY, e), P(-L, ridgeY, 0), P(L, ridgeY, 0)];
+  const mid: [number, number, number] = [0, eaveY + h / 3, 0];
+  const tri = (a: number[], b: number[], c: number[]) => {   // wound so that it faces away from the middle of the roof
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const out = (a[0] - mid[0]) * n[0] + (a[1] - mid[1]) * n[1] + (a[2] - mid[2]) * n[2] >= 0;
+    for (const q of out ? [a, b, c] : [a, c, b]) { pos.push(q[0], q[1], q[2]); col.push(roof.r, roof.g, roof.b); }
+  };
+  tri(a0, a1, r1); tri(a0, r1, r0);   // one slope
+  tri(b0, b1, r1); tri(b0, r1, r0);   // the other
+  tri(a0, b0, r0); tri(a1, b1, r1);   // the two gable ends
+  geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  return farHouseGeos[t] = geo;
+}
+/** The houses of one square as a single cheap mesh, for when the square is far away. Null when there are none. */
+function farHouses(houses: { g: THREE.Group; tier: number }[]): THREE.Mesh | null {
+  if (!houses.length) return null;
+  const parts = houses.map(h => { const g = farHouseGeometry(Math.min(3, Math.max(0, h.tier))).clone(); g.applyMatrix4(h.g.matrixWorld); return g; });
+  const geo = mergeGeometries(parts); parts.forEach(g => g.dispose()); if (!geo) return null;
+  geo.computeBoundingSphere(); geo.computeBoundingBox();
+  farHouseMat ??= new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
+  const mesh = new THREE.Mesh(geo, farHouseMat); mesh.receiveShadow = true;
+  return mesh;
+}
 
 export class VillageView {
   root = new THREE.Group();
@@ -2289,31 +2335,40 @@ export class VillageView {
     }
     if (!camera) return;
     for (const batch of this.cells.values()) {
-      const detail = batch.bounds.distanceToPoint(camera) <= detailRange * (batch.detail ? 1.1 : 1);
-      if (detail === batch.detail) continue;
-      batch.detail = detail;
-      for (const mesh of batch.merged) mesh.geometry.setDrawRange(0, detail ? Infinity : mesh.userData.structure);
+      const dist = batch.bounds.distanceToPoint(camera);
+      const detail = dist <= detailRange * (batch.detail ? 1.1 : 1);
+      const far = dist > detailRange * (batch.far ? FAR_RANGE * 0.9 : FAR_RANGE);
+      if (detail === batch.detail && far === batch.far) continue;
+      batch.detail = detail; batch.far = far;
+      for (const mesh of batch.merged) {
+        if (mesh.userData.far) { mesh.visible = far; continue; }
+        if (mesh.userData.house) mesh.visible = !far;
+        mesh.geometry.setDrawRange(0, detail ? Infinity : mesh.userData.structure);
+      }
     }
   }
 
   private batchCell(cell: string) {
     // parts are merged per surface (see foldKey), not per material object: the per-building colour variants differ only in their base colour, which is baked into the
     // vertex colours, so a cell is drawn with a handful of meshes instead of one per variant (469 draws became about 120 in a 287-building village)
-    const per = new Map<string, { mat: THREE.Material; folded: boolean; structure: THREE.BufferGeometry[]; details: THREE.BufferGeometry[]; meshes: BuildingBatch['original'] }>();
+    const per = new Map<string, { mat: THREE.Material; folded: boolean; house: boolean; structure: THREE.BufferGeometry[]; details: THREE.BufferGeometry[]; meshes: BuildingBatch['original'] }>();
     const original: BuildingBatch['original'] = [];
+    const houses: { g: THREE.Group; tier: number }[] = [];
     for (const it of this.items.values()) {
       if (it.cell !== cell) continue;
       const g = it.group; if (PLAIN.has(g.userData.kind) || g.userData.charred || it.pop !== undefined || it.build) continue;
       g.updateMatrix(); g.matrixAutoUpdate = false; g.updateMatrixWorld(true);
+      const isHouse = g.userData.kind === 0; if (isHouse) houses.push({ g, tier: it.tier });
       g.traverse(o => {
         const m = o as THREE.Mesh;
         if (!m.isMesh || !m.userData.baked || !m.visible || Array.isArray(m.material)) return;   // (a part with several materials keeps its own mesh)
         const geo = m.geometry.clone(); geo.applyMatrix4(m.matrixWorld);
         const mat = m.material as THREE.Material;
         const fold = foldKey(mat);
-        const key = fold && bakeColour(geo, mat as THREE.MeshStandardMaterial) ? fold : mat.uuid;
+        const folded = fold && bakeColour(geo, mat as THREE.MeshStandardMaterial) ? fold : null;
+        const key = (folded ?? mat.uuid) + (isHouse ? '|house' : '');   // (the parts of houses are merged apart from the rest: from afar they give way to `farHouses`)
         let parts = per.get(key);
-        if (!parts) per.set(key, parts = { mat: key === mat.uuid ? mat : foldedMaterial(key, mat as THREE.MeshStandardMaterial), folded: key !== mat.uuid, structure: [], details: [], meshes: [] });
+        if (!parts) per.set(key, parts = { mat: folded ? foldedMaterial(folded, mat as THREE.MeshStandardMaterial) : mat, folded: !!folded, house: isHouse, structure: [], details: [], meshes: [] });
         (m.userData.detail ? parts.details : parts.structure).push(geo);
         const entry = { mesh: m, parent: m.parent!, group: g };
         parts.meshes.push(entry); original.push(entry);   // (`original` keeps the scene order: unbatching puts the parts back in it)
@@ -2331,13 +2386,16 @@ export class VillageView {
       if (!geo) { for (const p of parts.meshes) unmerged.add(p.mesh); continue; }
       geo.computeBoundingSphere(); geo.computeBoundingBox(); bounds.union(geo.boundingBox!);
       const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true; mesh.castShadow = structure > 0;
-      mesh.userData.structure = structure; mesh.matrixAutoUpdate = false;
+      mesh.userData.structure = structure; mesh.matrixAutoUpdate = false; if (parts.house) mesh.userData.house = true;
       this.batchRoot.add(mesh); merged.push(mesh);
     }
     if (!merged.length) return;
+    const proxy = farHouses(houses.filter(h => h.g.userData.kind === 0 && !unmerged.size));
+    if (!proxy) for (const m of merged) delete m.userData.house;   // (no proxy to stand in for them: the houses stay drawn)
+    if (proxy) { proxy.visible = false; proxy.matrixAutoUpdate = false; proxy.userData.far = true; this.batchRoot.add(proxy); merged.push(proxy); }
     const taken = unmerged.size ? original.filter(o => !unmerged.has(o.mesh)) : original;
     for (const { mesh, parent } of taken) parent.remove(mesh);
-    this.cells.set(cell, { original: taken, merged, bounds, detail: true });
+    this.cells.set(cell, { original: taken, merged, bounds, detail: true, far: false });
   }
 
   private unbatch(cell: string) {
