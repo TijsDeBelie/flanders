@@ -2443,7 +2443,7 @@ function perDayHtml(d: { cycle: number; maxTier: number; jobs: number }, tier: n
   const stat = (label: string, now: [number, number][], next: [number, number][] | null, sign: string) =>
     `<div class="stat"><b>${cell(now, sign)}</b><span>${label}</span>${next ? `<small class="muted">Next tier: ${cell(next, sign)}</small>` : ''}</div>`;
   const up = tier < d.maxTier;
-  return `${speed !== 100 ? `<p class="muted">Upgrades: works ${speed - 100}% faster. Included below.</p>` : ''}<div class="stats">${stat('Makes per day', perDay(d, recipe.outputs, tier, speed), up ? perDay(d, recipe.outputs, tier + 1, speed) : null, '+')}${recipe.inputs.length ? stat('Uses per day', perDay(d, recipe.inputs, tier, speed), up ? perDay(d, recipe.inputs, tier + 1, speed) : null, '−') : ''}</div>`;
+  return `${speed !== 100 ? `<p class="muted">Work pace ${speed}%${speed < 100 ? ' (no road to the castle)' : ' (design upgrades)'}: included below. Figures assume a full crew.</p>` : ''}<div class="stats">${stat('Makes per day', perDay(d, recipe.outputs, tier, speed), up ? perDay(d, recipe.outputs, tier + 1, speed) : null, '+')}${recipe.inputs.length ? stat('Uses per day', perDay(d, recipe.inputs, tier, speed), up ? perDay(d, recipe.inputs, tier + 1, speed) : null, '−') : ''}</div>`;
 }
 function scaled(a: [number, number][], tier: number): [number, number][] { return a.map(([r, n]) => [r, Math.max(n, Math.floor((n * (4 + 5 * tier) + 2) / 4))]); }
 
