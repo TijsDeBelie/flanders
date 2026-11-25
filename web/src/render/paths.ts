@@ -109,7 +109,7 @@ export class Paths {
     for (let i = 0; i < buildings.length; i += S) {
       const kind = buildings[i], x = buildings[i + 2], z = buildings[i + 3];
       if (kind === 2 || kind === 21 || kind === 22 || kind === 24 || kind === 32 || kind === 33 || kind === 34 || kind === 37 || kind === 38 || kind === 44) continue; // walls, fences, gates, moats and squares (which are paved themselves) have no apron
-      const isHall = kind === 15; let R = isHall ? (hallTier >= 3 ? 33 : radii[kind] + 3.8 + hallTier * 0.8) : radii[kind] * 1.05 + 1.0; const rings = 5, seg = 28;
+      const isHall = kind === 15; let R = isHall ? (hallTier >= 3 ? 33 : radii[kind] + 3.8 + hallTier * 0.8) : radii[kind] * 1.05 + 1.0; const rings = 4, seg = 16;   // (about 110 triangles: a flat decal does not need more)
       // never under a neighbour: the apron stops short of the nearest other building (only those near enough to matter are looked at: a farther one cannot shorten it)
       const reach = R + maxRad * 0.9 + 0.3, gx0 = Math.floor((x - reach) / CELL), gx1 = Math.floor((x + reach) / CELL), gz0 = Math.floor((z - reach) / CELL), gz1 = Math.floor((z + reach) / CELL);
       for (let gx = gx0; gx <= gx1; gx++) for (let gz = gz0; gz <= gz1; gz++) {
