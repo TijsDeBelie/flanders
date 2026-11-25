@@ -2438,12 +2438,14 @@ function selectKind(k: number | null) {
 /** Amounts per day at full staffing (a cycle is `cycle` ticks, a day 240), with the building's speed upgrades (`speed` in percent). */
 function perDay(d: { cycle: number }, a: [number, number][], tier: number, speed = 100): [number, number][] { return scaled(a, tier).map(([r, n]) => [r, Math.round(n * 240 / d.cycle * speed / 100)]); }
 /** What a producer makes and uses per day at its present tier, and the same at the next one. */
-function perDayHtml(d: { cycle: number; maxTier: number; jobs: number }, tier: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }, speed = 100): string {
+function perDayHtml(d: { cycle: number; maxTier: number; jobs: number }, tier: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }, pace: number[] = [100, 100, 100]): string {
+  const speed = Math.round(pace[0] * pace[1] * pace[2] / 10000), why = [pace[0] > 100 ? `upgrades +${pace[0] - 100}%` : '', pace[1] < 100 ? 'no road to the castle: half pace' : '', pace[2] < 100 ? `crew ${pace[2]}% staffed` : ''].filter(Boolean);
+  const paceNote = speed !== 100 ? `<p class="muted">Work pace ${speed}% (${why.join(', ')}). Included below.</p>` : '';
   const cell = (a: [number, number][], sign: string) => a.map(([r, n]) => `${resIcon(r)} ${sign}${n}`).join(' ');
   const stat = (label: string, now: [number, number][], next: [number, number][] | null, sign: string) =>
     `<div class="stat"><b>${cell(now, sign)}</b><span>${label}</span>${next ? `<small class="muted">Next tier: ${cell(next, sign)}</small>` : ''}</div>`;
   const up = tier < d.maxTier;
-  return `${speed !== 100 ? `<p class="muted">Work pace ${speed}%${speed < 100 ? ' (no road to the castle)' : ' (design upgrades)'}: included below. Figures assume a full crew.</p>` : ''}<div class="stats">${stat('Makes per day', perDay(d, recipe.outputs, tier, speed), up ? perDay(d, recipe.outputs, tier + 1, speed) : null, '+')}${recipe.inputs.length ? stat('Uses per day', perDay(d, recipe.inputs, tier, speed), up ? perDay(d, recipe.inputs, tier + 1, speed) : null, '−') : ''}</div>`;
+  return `${paceNote}<div class="stats">${stat('Makes per day', perDay(d, recipe.outputs, tier, speed), up ? perDay(d, recipe.outputs, tier + 1, speed) : null, '+')}${recipe.inputs.length ? stat('Uses per day', perDay(d, recipe.inputs, tier, speed), up ? perDay(d, recipe.inputs, tier + 1, speed) : null, '−') : ''}</div>`;
 }
 function scaled(a: [number, number][], tier: number): [number, number][] { return a.map(([r, n]) => [r, Math.max(n, Math.floor((n * (4 + 5 * tier) + 2) / 4))]); }
 
@@ -2874,7 +2876,7 @@ function updateSelection() {
   if (d.cycle) {
     html += `<div class="stats"><div class="stat"><b>${STATUS[status]}</b><span>Status</span></div><div class="stat"><b>${icon('worker', 20)} ${f[o + 8]} / ${d.jobs * (tier + 1)}</b><span>Workers</span></div></div>
       <div><div class="eyebrow">Production cycle</div><div class="bar"><i style="width:${pct}%"></i></div></div>${depositHtml(selectedIdx)}
-${perDayHtml(d, tier, recipe, w.work_speed(selectedIdx))}`;
+${perDayHtml(d, tier, recipe, Array.from(w.work_pace(selectedIdx)))}`;
   } else if (d.housing) html += `<div class="stats"><div class="stat"><b>${icon('house', 20)} ${f[o + 9]} / ${d.housing * (tier + 1)}</b><span>Residents</span></div></div><p class="muted">Residents walk the village paths to their workplaces each day.</p>`;
   if (kind === 15) html += `<p class="muted">Raises storage to ${600 + 200 * tier} per resource and expands your border.</p><h3>Diplomacy</h3><p class="muted">Envoys, treaties, trade and war are handled from the town hall.</p><button class="pbtn primary" data-act="diplomacy">Open diplomacy</button>`;
   if (kind === 15) html += kingdomRoadsHtml(stocks);
