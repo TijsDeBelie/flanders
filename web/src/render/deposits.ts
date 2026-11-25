@@ -16,7 +16,9 @@ const mats = [
   new THREE.MeshStandardMaterial({ color: 0xb9663a, roughness: 0.7, flatShading: true }),                     // clay
   new THREE.MeshStandardMaterial({ color: 0x6d6560, roughness: 1, flatShading: true }),                       // iron host rock
   new THREE.MeshStandardMaterial({ color: 0x7c7770, roughness: 1, flatShading: true }),                       // gold host rock
+  new THREE.MeshStandardMaterial({ color: 0x6e3b22, roughness: 0.25, flatShading: true }),                    // wet clay in the pit
 ];
+const WET = 4;
 const oreMats = [
   null, null,
   new THREE.MeshStandardMaterial({ color: 0xa8482a, roughness: 0.6, metalness: 0.3, flatShading: true }),
@@ -126,6 +128,7 @@ export class Deposits {
       if (cur) this.release(d);
       const g = this.groups[d], door = 2.0;
       const decal = new THREE.Mesh(new THREE.CircleGeometry(2.7, 20).rotateX(-Math.PI / 2), this.decalMat);
+      if (this.flat[d * 5] === 1) { decal.scale.set(1.35, 1, 0.8); decal.rotation.y = Math.atan2(w.dx, w.dz); }   // clay: a long muddy track, not a circle
       decal.position.set(w.x + w.dx * (door + 0.4), this.terrain.heightAt(w.x + w.dx * door, w.z + w.dz * door) + 0.07, w.z + w.dz * (door + 0.4)); decal.renderOrder = 2; this.group.add(decal);
       const tinted: THREE.Object3D[] = [];
       for (const p of this.parts) {   // the rocks nearest the door are darker: worked, weathered
@@ -153,13 +156,16 @@ export class Deposits {
     for (let i = 0; i < flat.length; i += 5) {
       const kind = flat[i], x = flat[i + 1], z = flat[i + 2], g = new THREE.Group();
       g.position.set(x, terrain.heightAt(x, z) - 0.15, z);
-      const n = kind === 1 ? 4 : 6;
+      const n = kind === 1 ? 8 : 6;
       for (let k = 0; k < n; k++) {
-        const s = 0.9 + rand(i * 3 + k) * (kind === 1 ? 1.6 : 1.4), a = rand(i + k * 7) * 6.28, d = k === 0 ? 0 : 1.3 + rand(i + k * 11) * 1.6;
+        // clay: a ring of low spoil heaps round a wet pit (k = 0), not a dome
+        const pit = kind === 1 && k === 0, heap = kind === 1 && !pit;
+        const s = pit ? 2.3 : heap ? 0.55 + rand(i * 3 + k) * 0.5 : 0.9 + rand(i * 3 + k) * 1.4;
+        const a = heap ? ((k - 1) / (n - 1)) * 6.28 + rand(i + k) * 0.4 : rand(i + k * 7) * 6.28, d = pit ? 0 : heap ? 2.4 + rand(i + k * 11) * 0.7 : k === 0 ? 0 : 1.3 + rand(i + k * 11) * 1.6;
         const m = new THREE.Object3D(), v = (i + k) % VARIANTS;
-        m.scale.setScalar(kind === 1 ? s * 1.3 : s); if (kind === 1) m.scale.y *= 0.45;
+        m.scale.setScalar(s); if (pit) m.scale.y = 0.1; else if (heap) m.scale.set(s * 1.5, s * 0.5, s * 1.1);
         m.position.set(Math.cos(a) * d, 0.35 * s, Math.sin(a) * d); m.rotation.y = a;
-        g.add(m); want.push({ node: m, key: `r${kind}:${v}`, mat: mats[kind], geo: rockShapes[v], shadow: true });
+        g.add(m); want.push({ node: m, key: `r${kind}:${v}${pit ? 'w' : ''}`, mat: pit ? mats[WET] : mats[kind], geo: rockShapes[v], shadow: !pit });
         const part = { g, rock: m, ore: [] as { o: THREE.Object3D; dy: number }[], lift: 0.35 * (m.scale.y) };
         this.parts.push(part);
         const ore = oreMats[kind];
