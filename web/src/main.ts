@@ -2748,8 +2748,9 @@ function multiPane() {
 function multiUpgrade() {
   const w = lv.world, plan = planUpgrade(multiSel, w.buildings_flat(), k => defs[k].maxTier, upgrade_cost_flat, Array.from(w.stocks()));
   let done = 0, room = 0, poor = plan.poor.length; const fxAt: number[] = [];
-  for (const i of plan.go) {
-    const code = w.upgrade(i);
+  const codes = w.upgrade_batch(Uint32Array.from(plan.go));   // (the roads are rebuilt once, not after every building)
+  for (const [n, i] of plan.go.entries()) {
+    const code = codes[n] ?? -1;
     if (code === 0) { done++; commit({ op: 'upgrade', idx: i }); fxAt.push(i); } else if (code === -3) room++; else poor++;
   }
   const f = w.buildings_flat(); for (const i of fxAt.slice(0, 6)) placedFx(f[i * STRIDE], f[i * STRIDE + 2], f[i * STRIDE + 3], true);

@@ -54,6 +54,7 @@ export const deck = (ax: number, az: number, bx: number, bz: number, half: numbe
 export class Terrain {
   scorch: Float32Array = new Float32Array(0); // burnt ground discs [x, z, r, ...] from every village
   heights: Float32Array;       // current (with pads, with coast drop)
+  private heightBits: Uint32Array;   // the same memory read as bits, for `heightsHash`
   base: Float32Array;          // base terrain
   private riverStages: Float32Array;
   private riverCells: Uint8Array;
@@ -79,7 +80,7 @@ export class Terrain {
   constructor(seed: bigint, rawLand?: Float32Array) {
     const raw = rawLand ?? terrain_land_rows(seed, -HALF, -HALF, NV, STEP, 0, NV);
     this.base = new Float32Array(NV * NV);
-    this.heights = new Float32Array(NV * NV);
+    this.heights = new Float32Array(NV * NV); this.heightBits = new Uint32Array(this.heights.buffer);
     this.riverStages = new Float32Array(NV * NV);
     for (let k = 0; k < this.base.length; k++) {
       this.base[k] = this.heights[k] = raw[k * 2];
@@ -388,6 +389,15 @@ export class Terrain {
     const p = committed ? this.preview : null, k = j * NV + i;
     const a = p?.get(k) ?? H[k], b = p?.get(k + 1) ?? H[k + 1], c = p?.get(k + NV) ?? H[k + NV], d = p?.get(k + NV + 1) ?? H[k + NV + 1];
     return triangleHeight(a, b, c, d, tx, tz);
+  }
+
+  /** A fingerprint of the ground heights that `heightAt` reads for points in this rectangle: it is the same until some height there changes. */
+  heightsHash(x0: number, z0: number, x1: number, z1: number): number {
+    const i0 = Math.max(0, Math.floor((x0 + HALF) / STEP) - 1), i1 = Math.min(NV - 1, Math.floor((x1 + HALF) / STEP) + 2);
+    const j0 = Math.max(0, Math.floor((z0 + HALF) / STEP) - 1), j1 = Math.min(NV - 1, Math.floor((z1 + HALF) / STEP) + 2);
+    const bits = this.heightBits; let h = 0x811c9dc5;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) h = Math.imul(h ^ bits[j * NV + i], 0x01000193);
+    return h >>> 0;
   }
 
   /** Pick committed terrain so a placement preview cannot move the ground under its own pointer. */

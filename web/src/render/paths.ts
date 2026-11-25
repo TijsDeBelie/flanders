@@ -76,6 +76,8 @@ export class Paths {
     this.group.add(this.tracks);
   }
 
+  private aprons = new Map<string, { pos: number[]; col: number[]; uv: number[] }>();
+
   /** Rebuild from the world: buildings_flat (stride 10), the road lines (World.road_lines_flat: the stub of every building and the roads the player laid, see roadmesh.ts), building radii and the birth ticks. */
   update(buildings: Float32Array, roadLines: ArrayLike<number>, radii: number[], born: ArrayLike<number> = []) {
     void born;
@@ -96,27 +98,53 @@ export class Paths {
     rb = -1e6; rs = 0; rp = 0;
     const roadIdx = idx.length;
     // aprons under buildings (and the plaza under the hall)
+    const noApron = (k: number) => k === 2 || k === 21 || k === 22 || k === 24 || k === 32 || k === 33 || k === 34 || k === 37 || k === 38 || k === 44;
+    const CELL = 16, grid = new Map<number, number[]>(); let maxRad = 0;
+    for (let j = 0; j < buildings.length; j += S) {
+      const k2 = buildings[j]; if (noApron(k2)) continue;
+      maxRad = Math.max(maxRad, radii[k2] ?? 0);
+      const key = Math.floor(buildings[j + 2] / CELL) * 100003 + Math.floor(buildings[j + 3] / CELL); const l = grid.get(key); if (l) l.push(j); else grid.set(key, [j]);
+    }
+    const nextAprons = new Map<string, { pos: number[]; col: number[]; uv: number[] }>();
     for (let i = 0; i < buildings.length; i += S) {
       const kind = buildings[i], x = buildings[i + 2], z = buildings[i + 3];
       if (kind === 2 || kind === 21 || kind === 22 || kind === 24 || kind === 32 || kind === 33 || kind === 34 || kind === 37 || kind === 38 || kind === 44) continue; // walls, fences, gates, moats and squares (which are paved themselves) have no apron
       const isHall = kind === 15; let R = isHall ? (hallTier >= 3 ? 33 : radii[kind] + 3.8 + hallTier * 0.8) : radii[kind] * 1.05 + 1.0; const rings = 5, seg = 28;
-      for (let j = 0; j < buildings.length; j += S) {   // never under a neighbour: the apron stops short of the nearest other building
-        const k2 = buildings[j]; if (j === i || k2 === 2 || k2 === 21 || k2 === 22 || k2 === 24 || k2 === 32 || k2 === 33 || k2 === 34 || k2 === 37 || k2 === 38 || k2 === 44) continue;
-        R = Math.min(R, Math.max(radii[kind] * 0.8, Math.hypot(buildings[j + 2] - x, buildings[j + 3] - z) - radii[k2] * 0.9 - 0.3));
+      // never under a neighbour: the apron stops short of the nearest other building (only those near enough to matter are looked at: a farther one cannot shorten it)
+      const reach = R + maxRad * 0.9 + 0.3, gx0 = Math.floor((x - reach) / CELL), gx1 = Math.floor((x + reach) / CELL), gz0 = Math.floor((z - reach) / CELL), gz1 = Math.floor((z + reach) / CELL);
+      for (let gx = gx0; gx <= gx1; gx++) for (let gz = gz0; gz <= gz1; gz++) {
+        const cell = grid.get(gx * 100003 + gz); if (!cell) continue;
+        for (const j of cell) {
+          if (j === i) continue;
+          const k2 = buildings[j];
+          R = Math.min(R, Math.max(radii[kind] * 0.8, Math.hypot(buildings[j + 2] - x, buildings[j + 3] - z) - radii[k2] * 0.9 - 0.3));
+        }
       }
       tint = true;
       const base = pos.length / 3;
-      vert(x, z, 0.95, 0.5, 0.5);
-      for (let r = 1; r <= rings; r++) for (let k = 0; k < seg; k++) {
-        const a = (k / seg) * Math.PI * 2, rr = (R * r) / rings, fade = r >= rings ? 0 : r === rings - 1 ? 0.55 : 0.95;
-        vert(x + Math.cos(a) * rr, z + Math.sin(a) * rr, fade * (isHall ? 1 : 0.85), 0.5 + Math.cos(a) * (r / rings) * 0.5, 0.5 + Math.sin(a) * (r / rings) * 0.5);
+      // an apron is the same until its shape or the ground under it changes: it is kept from one update to the next, so a build that changes one corner redoes only the aprons it touches
+      const key = `${kind}:${x}:${z}:${R}:${this.terrain.heightsHash(x - R - 1.6, z - R - 1.6, x + R + 1.6, z + R + 1.6)}`;
+      let ap = this.aprons.get(key);
+      if (!ap) {
+        const p0 = pos.length, c0 = col.length, u0 = uv.length;
+        vert(x, z, 0.95, 0.5, 0.5);
+        for (let r = 1; r <= rings; r++) for (let k = 0; k < seg; k++) {
+          const a = (k / seg) * Math.PI * 2, rr = (R * r) / rings, fade = r >= rings ? 0 : r === rings - 1 ? 0.55 : 0.95;
+          vert(x + Math.cos(a) * rr, z + Math.sin(a) * rr, fade * (isHall ? 1 : 0.85), 0.5 + Math.cos(a) * (r / rings) * 0.5, 0.5 + Math.sin(a) * (r / rings) * 0.5);
+        }
+        ap = { pos: pos.slice(p0), col: col.slice(c0), uv: uv.slice(u0) };
+      } else {
+        pos.push(...ap.pos); col.push(...ap.col); uv.push(...ap.uv);   // (a few hundred numbers each: well inside the argument limit)
+        for (let k = 0; k < ap.pos.length / 3; k++) rd.push(rb, rs, rp);
       }
+      nextAprons.set(key, ap);
       for (let k = 0; k < seg; k++) idx.push(base, base + 1 + k, base + 1 + ((k + 1) % seg));
       for (let r = 1; r < rings; r++) for (let k = 0; k < seg; k++) {
         const a = base + 1 + (r - 1) * seg + k, b = base + 1 + (r - 1) * seg + ((k + 1) % seg), c = a + seg, d = b + seg;
         idx.push(a, c, b, b, c, d);
       }
     }
+    this.aprons = nextAprons;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
