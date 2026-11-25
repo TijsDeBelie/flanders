@@ -601,6 +601,9 @@ pub fn solid_radius_of(kind: u8, tier: u8) -> f32 { solid_radius(kind, tier) }
 #[wasm_bindgen]
 pub fn ring_radius_of(kind: u8, tier: u8) -> f32 { pathnet::ring_radius(kind, tier) }
 
+/// The lists of ground changes `height_layers` goes through: the village's own, or only those near a region (`layers_near`).
+struct Layers<'a> { levels: &'a [[f32; 4]], flats: &'a [[f32; 4]], roads: &'a [[f32; 6]], pads: &'a [Building], craters: &'a [[f32; 4]] }
+
 /// A walkable deck as an oriented strip: the middle, the direction along it, half its length (it is 3.8 wide).
 pub(crate) struct Deck { x: f32, y: f32, ux: f32, uy: f32, half: f32 }
 
@@ -1051,8 +1054,13 @@ impl World {
 
     /// `height_from` over `bs`, which must hold every ditch, earthwork and drawbridge of the village in their order in `buildings` (other buildings are skipped anyway).
     fn height_from_in(&self, x: f32, y: f32, moats: bool, built: bool, base: f32, bs: &[Building]) -> f32 {
+        self.height_layers(&Layers { levels: &self.levels, flats: &self.flats, roads: &self.roads, pads: &self.buildings, craters: &self.craters }, x, y, moats, built, base, bs)
+    }
+
+    /// The height at a point from the given layers of ground changes (see `Layers`): every one the loops below would skip for this point may be left out, nothing else.
+    fn height_layers(&self, lay: &Layers, x: f32, y: f32, moats: bool, built: bool, base: f32, bs: &[Building]) -> f32 {
         let mut h = base;
-        for l in &self.levels {   // ground levelled flat on purpose
+        for l in lay.levels {   // ground levelled flat on purpose
             let (dx, dy) = (x - l[0], y - l[1]); let reach = l[2] + LEVEL_BLEND;
             if dx.abs() > reach || dy.abs() > reach { continue; }
             let d = (dx * dx + dy * dy).sqrt();
@@ -1087,7 +1095,7 @@ impl World {
             if fr > 0.0 && h > RIVER_BED + rise { h += (RIVER_BED + rise - h) * fr.min(1.0); }
             ditch = fm.max(fr).min(1.0);
         }
-        for f in &self.flats {   // ground the player levelled: after the ditches and earthworks, so it hides whatever was dug there
+        for f in lay.flats {   // ground the player levelled: after the ditches and earthworks, so it hides whatever was dug there
             let (dx, dy) = (x - f[0], y - f[1]); let reach = f[2] + flatten::FLAT_SHOULDER;
             if dx.abs() > reach || dy.abs() > reach { continue; }
             let d = (dx * dx + dy * dy).sqrt();
@@ -1108,7 +1116,7 @@ impl World {
             if !self.river_covers(x, y, h) { h = lerp(h, b.pad_h, w * smoothstep(-0.8, 0.0, h)); }
         }
         if !built { return h; }
-        for s in &self.roads {
+        for s in lay.roads {
             let (minx, maxx) = (s[0].min(s[3]) - ROAD_OUTER, s[0].max(s[3]) + ROAD_OUTER);
             let (miny, maxy) = (s[1].min(s[4]) - ROAD_OUTER, s[1].max(s[4]) + ROAD_OUTER);
             if x < minx || x > maxx || y < miny || y > maxy { continue; }
@@ -1121,7 +1129,7 @@ impl World {
                 h = lerp(h, lerp(s[2], s[5], t), (1.0 - smoothstep(ROAD_INNER, ROAD_OUTER, d)) * smoothstep(-0.6, 0.0, h));
             }
         }
-        for b in &self.buildings {
+        for b in lay.pads {
             let d = &DEFS[b.kind as usize];
             if is_edit(b.kind) { continue; }   // ditches and earthworks were applied above, before roads and pads
             if !d.pad { continue; }
@@ -1149,7 +1157,7 @@ impl World {
                 h = lerp(h, b.pad_h, weight);
             }
         }
-        for c in &self.craters {
+        for c in lay.craters {
             let (dx, dy) = (x - c[0], y - c[1]);
             if dx.abs() > c[2] || dy.abs() > c[2] { continue; }
             let d = (dx * dx + dy * dy).sqrt();
@@ -1158,10 +1166,42 @@ impl World {
         h
     }
 
+    /// The ground changes that can reach any point of a rectangle, in their usual order. Everything left out would be skipped by `height_layers` at every point of it (each test below is
+    /// the loop's own `continue` test, widened by a little), so the heights are the same to the bit; it spares a walk over every building and road for each sample.
+    fn layers_near(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 6]>, Vec<Building>, Vec<Building>, Vec<[f32; 4]>) {
+        const PAD: f32 = 1.0;
+        let near = |cx: f32, cy: f32, reach: f32| cx + reach + PAD >= x0 && cx - reach - PAD <= x1 && cy + reach + PAD >= y0 && cy - reach - PAD <= y1;
+        let levels = self.levels.iter().filter(|l| near(l[0], l[1], l[2] + LEVEL_BLEND)).copied().collect();
+        let flats = self.flats.iter().filter(|f| near(f[0], f[1], f[2] + flatten::FLAT_SHOULDER)).copied().collect();
+        let roads = self.roads.iter().filter(|s| s[0].min(s[3]) - ROAD_OUTER - PAD <= x1 && s[0].max(s[3]) + ROAD_OUTER + PAD >= x0 && s[1].min(s[4]) - ROAD_OUTER - PAD <= y1 && s[1].max(s[4]) + ROAD_OUTER + PAD >= y0).copied().collect();
+        let craters = self.craters.iter().filter(|c| near(c[0], c[1], c[2])).copied().collect();
+        // ditches, earthworks and drawbridges (the `bs` list), and the buildings with a pad (the pads list)
+        let edits = self.buildings.iter().filter(|b| {
+            let bank = match b.kind { MOAT => MOAT_FLOOR * moat_scale(b) + CHANNEL_BANK, RIVER => RIVER_FLOOR + CHANNEL_BANK, RAISE | LOWER => 5.0, DRAWBRIDGE => 24.0, _ => return false };
+            near(b.x, b.y, bank)
+        }).cloned().collect();
+        let pads = self.buildings.iter().filter(|b| {
+            let d = &DEFS[b.kind as usize];
+            if is_edit(b.kind) || !d.pad { return false; }
+            let r0 = if b.kind == TOWN_HALL && b.tier >= 3 { footprint(TOWN_HALL, 3) } else { pad_inner(d) };
+            near(b.x, b.y, (r0 + 3.5).max(if b.kind == FARM { FARM_PAD_REACH } else { 0.0 }))
+        }).cloned().collect();
+        (levels, flats, roads, edits, pads, craters)
+    }
+
     /// Heights of an nx*ny grid (with pads) â€“ used to refresh the mesh after building.
     pub fn terrain_region(&self, x0: f32, y0: f32, nx: u32, ny: u32, step: f32) -> Vec<f32> {
-        let mut out = Vec::with_capacity((nx * ny) as usize);
-        for j in 0..ny { for i in 0..nx { out.push(self.height_at(x0 + i as f32 * step, y0 + j as f32 * step)); } }
+        // worked out a small tile at a time: the pieces that can reach a tile are picked out once for its samples, not looked through again for every one of them
+        const TILE: u32 = 8;
+        let mut out = vec![0.0f32; (nx * ny) as usize];
+        for tj in (0..ny).step_by(TILE as usize) { for ti in (0..nx).step_by(TILE as usize) {
+            let (ei, ej) = ((ti + TILE).min(nx), (tj + TILE).min(ny));
+            let (xa, xb) = (x0 + ti as f32 * step, x0 + (ei - 1) as f32 * step);
+            let (ya, yb) = (y0 + tj as f32 * step, y0 + (ej - 1) as f32 * step);
+            let (levels, flats, roads, edits, pads, craters) = self.layers_near(xa.min(xb), ya.min(yb), xa.max(xb), ya.max(yb));
+            let lay = Layers { levels: &levels, flats: &flats, roads: &roads, pads: &pads, craters: &craters };
+            for j in tj..ej { for i in ti..ei { let (x, y) = (x0 + i as f32 * step, y0 + j as f32 * step); out[(j * nx + i) as usize] = self.height_layers(&lay, x, y, true, true, self.base(x, y), &edits); } }
+        } }
         out
     }
 
