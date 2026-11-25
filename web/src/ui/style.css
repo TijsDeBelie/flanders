@@ -675,3 +675,8 @@ body.cmd-mode #cs-sel { display: none; }
 @media (hover: hover) { *::-webkit-scrollbar-thumb:hover { background: #8a6b3f; background-clip: padding-box; } }
 .setbody { overflow-x: hidden; padding-right: 6px; } .setrow { min-width: 0; }
 .sheet { color-scheme: light; } #ledger { color-scheme: light; }
+
+/* ---------- interface size (Settings > Display): only when it is not 100%, so the default layout is never touched ---------- */
+body.uiscaled :is(#topbar, #ledger, #ledger-open, #goals, #follow-stop, #minimap-card, #tool-dock, #ctxmenu, #toasts, .overlay > .sheet, #choicebox) { zoom: var(--ui-scale, 1); }
+body.uiscaled .overlay > .sheet { max-width: calc(100vw / var(--ui-scale, 1) - 16px); max-height: calc(100dvh / var(--ui-scale, 1) - 16px); }
+body.uiscaled #ledger { height: auto; bottom: calc(14px / var(--ui-scale, 1)); }

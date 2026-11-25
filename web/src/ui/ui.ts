@@ -20,6 +20,7 @@ const bi = (name: string, size = 16) => icon(name, size, { mono: true });
 import { ACTIONS, keys, prettyKey, type Action } from '../keys';
 import { mountFlagDesigner, paintFlag } from './flagdesigner';
 import { mountSettings } from './settingsui';
+import { settings, onSettings } from '../settings';
 import { mountRestart, type RestartHooks } from './restartui';
 import { downloadBackup } from '../backup';
 import { loadFlag, saveFlag } from '../flag';
@@ -527,6 +528,7 @@ export class UI {
     const restart = mountRestart($('restart'), { info: () => this.h.restartInfo(), run: () => this.h.restartRun(), restore: () => this.h.restartRestore(), backup: () => downloadBackup(), toast: (t, k) => this.toast(t, k) });
     this.restartSection = () => { void restart.drawSection($('restart-section')); };
     this.initSettingsTabs();
+    { const apply = () => { const k = settings().uiScale; document.body.classList.toggle('uiscaled', k !== 1); document.body.style.setProperty('--ui-scale', String(k)); }; apply(); onSettings((_, c) => { if (c.includes('uiScale')) apply(); }); }
     mountSettings($('display-body'), () => this.toast('Anti-aliasing is chosen when the page loads: reload to apply it.', 'info'), () => { this.modal('settings', false); this.h.watch(''); }, text => this.confirm(text, 'Replace', 'Restore this backup?'));
     $('btn-mp').onclick = () => this.modal('mp', true);
     const setBattleMin = (min: boolean) => { this.battleMin = min; $('battle').hidden = min || $('btn-bell').hidden; this.syncBattleBar(); $('btn-bell').classList.toggle('alert', min); $('btn-bell').setAttribute('aria-pressed', String(!min)); };
@@ -825,10 +827,27 @@ export class UI {
       timer = window.setTimeout(() => {
         const text = t.dataset.tip;
         if (!text || !t.matches(':hover')) return;
-        const r = t.getBoundingClientRect(); this.tip(`<small style="color:#f3ead2">${esc(text)}</small>`, Math.max(8, Math.min(innerWidth - 280, r.left)) - 16, r.bottom > innerHeight - 80 ? r.top - 56 : r.bottom - 6); $('tooltip').dataset.from = 'title';
+        const r = t.getBoundingClientRect(); this.tip(`<small style="color:#f3ead2">${esc(forTouch(text))}</small>`, Math.max(8, Math.min(innerWidth - 280, r.left)) - 16, r.bottom > innerHeight - 80 ? r.top - 56 : r.bottom - 6); $('tooltip').dataset.from = 'title';
       }, 380);
     });
     document.addEventListener('mouseout', e => { if (cur && !cur.contains(e.relatedTarget as Node)) hide(); });
+    // a finger has no hover: holding one on a button or label shows its tooltip (in touch words) for a few seconds, and the tap that ends the hold does nothing
+    let hold = 0, shown = 0, swallow = false;
+    document.addEventListener('pointerdown', e => {
+      swallow = false;
+      if (e.pointerType !== 'touch' || !document.body.classList.contains('mobile')) return;
+      const t = (e.target as HTMLElement).closest?.('[title],[data-tip]') as HTMLElement | null; if (!t || t.closest('#tooltip')) return;
+      const title = t.getAttribute('title'); if (title) { t.dataset.tip = title; t.removeAttribute('title'); }
+      if (!t.dataset.tip) return;
+      clearTimeout(hold); hold = window.setTimeout(() => {
+        const r = t.getBoundingClientRect(), x = Math.max(8, Math.min(innerWidth - 280, r.left)), below = r.top < 120;
+        this.tip(`<small style="color:#f3ead2">${esc(forTouch(t.dataset.tip!))}</small>`, x, below ? r.bottom + 6 : r.top - 56); $('tooltip').dataset.from = 'title';
+        swallow = true; clearTimeout(shown); shown = window.setTimeout(() => { swallow = false; if ($('tooltip').dataset.from === 'title') { this.tip(null); $('tooltip').dataset.from = ''; } }, 3500);
+      }, 450);
+    });
+    const release = () => clearTimeout(hold);
+    document.addEventListener('pointerup', release, true); document.addEventListener('pointercancel', release, true); document.addEventListener('scroll', release, true);
+    document.addEventListener('click', e => { if (swallow) { swallow = false; e.stopPropagation(); e.preventDefault(); } }, true);
     document.addEventListener('pointerdown', hide, true); document.addEventListener('wheel', hide, { passive: true });
   }
 
@@ -836,8 +855,8 @@ export class UI {
     document.getElementById('data-replay')?.removeAttribute('hidden');   // watching your history needs a village: the start screen's Display settings do not offer it
     $('intro').hidden = true; $('topbar').hidden = false; $('ledger').hidden = false; $('minimap-card').hidden = false; this.applyPanels(); this.finishLoading();
     // keep the ledger below the top bar however many rows the bar wraps to
-    const bar = $('topbar'), set = () => document.documentElement.style.setProperty('--top-h', bar.offsetHeight + 'px');
-    set(); new ResizeObserver(set).observe(bar);
+    const bar = $('topbar'), set = () => document.documentElement.style.setProperty('--top-h', bar.getBoundingClientRect().height / settings().uiScale + 'px');
+    set(); new ResizeObserver(set).observe(bar); onSettings((_, changed) => { if (changed.includes('uiScale')) set(); });
   }
   private hoverPill = -1;
   private owner = '';

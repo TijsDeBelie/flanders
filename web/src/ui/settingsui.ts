@@ -8,6 +8,9 @@ const ROWS: { sec: 'display' | 'game' | 'controls'; title: string; rows: Row[] }
     { key: 'quality', label: 'Quality preset', hint: 'Sets most of the options below at once. Change any of them and it becomes Custom.', kind: 'select', options: [['low', 'Low: smooth on weak computers'], ['medium', 'Medium'], ['high', 'High (default)'], ['ultra', 'Ultra: for strong graphics cards'], ['custom', 'Custom']] },
     { key: 'fpsCap', label: 'Frame rate limit', hint: 'Lower limits save battery and keep a laptop cool.', kind: 'select', options: [['0', 'Unlimited (screen speed)'], ['60', '60 per second'], ['30', '30 per second']] },
   ] },
+  { sec: 'display', title: 'Interface', rows: [
+    { key: 'uiScale', label: 'Interface size', hint: 'Makes the panels, buttons and text bigger or smaller. The map is not affected. Useful on large screens and for tablets.', kind: 'range', min: 0.8, max: 1.3, step: 0.05 },
+  ] },
   { sec: 'display', title: 'Overlays', rows: [
     { key: 'showFps', label: 'Show frame rate', hint: 'The small counter in the corner (also F3 for details).', kind: 'toggle' },
     { key: 'showPaths', label: 'Show walking paths', hint: 'Draws the invisible path network as red lines (bright on roads): where soldiers and villagers may walk. For checking how they get about.', kind: 'toggle' },
