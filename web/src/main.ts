@@ -2435,15 +2435,15 @@ function selectKind(k: number | null) {
 }
 
 /** Better buildings employ more people and make more: x1, x2.25, x3.5, x4.75. */
-/** Amounts per day at full staffing (a cycle is `cycle` ticks, a day 240). */
-function perDay(d: { cycle: number }, a: [number, number][], tier: number): [number, number][] { return scaled(a, tier).map(([r, n]) => [r, Math.round(n * 240 / d.cycle)]); }
+/** Amounts per day at full staffing (a cycle is `cycle` ticks, a day 240), with the building's speed upgrades (`speed` in percent). */
+function perDay(d: { cycle: number }, a: [number, number][], tier: number, speed = 100): [number, number][] { return scaled(a, tier).map(([r, n]) => [r, Math.round(n * 240 / d.cycle * speed / 100)]); }
 /** What a producer makes and uses per day at its present tier, and the same at the next one. */
-function perDayHtml(d: { cycle: number; maxTier: number; jobs: number }, tier: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }): string {
+function perDayHtml(d: { cycle: number; maxTier: number; jobs: number }, tier: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }, speed = 100): string {
   const cell = (a: [number, number][], sign: string) => a.map(([r, n]) => `${resIcon(r)} ${sign}${n}`).join(' ');
   const stat = (label: string, now: [number, number][], next: [number, number][] | null, sign: string) =>
     `<div class="stat"><b>${cell(now, sign)}</b><span>${label}</span>${next ? `<small class="muted">Next tier: ${cell(next, sign)}</small>` : ''}</div>`;
   const up = tier < d.maxTier;
-  return `<div class="stats">${stat('Makes per day', perDay(d, recipe.outputs, tier), up ? perDay(d, recipe.outputs, tier + 1) : null, '+')}${recipe.inputs.length ? stat('Uses per day', perDay(d, recipe.inputs, tier), up ? perDay(d, recipe.inputs, tier + 1) : null, '−') : ''}</div>`;
+  return `${speed !== 100 ? `<p class="muted">Upgrades: works ${speed - 100}% faster. Included below.</p>` : ''}<div class="stats">${stat('Makes per day', perDay(d, recipe.outputs, tier, speed), up ? perDay(d, recipe.outputs, tier + 1, speed) : null, '+')}${recipe.inputs.length ? stat('Uses per day', perDay(d, recipe.inputs, tier, speed), up ? perDay(d, recipe.inputs, tier + 1, speed) : null, '−') : ''}</div>`;
 }
 function scaled(a: [number, number][], tier: number): [number, number][] { return a.map(([r, n]) => [r, Math.max(n, Math.floor((n * (4 + 5 * tier) + 2) / 4))]); }
 
@@ -2874,7 +2874,7 @@ function updateSelection() {
   if (d.cycle) {
     html += `<div class="stats"><div class="stat"><b>${STATUS[status]}</b><span>Status</span></div><div class="stat"><b>${icon('worker', 20)} ${f[o + 8]} / ${d.jobs * (tier + 1)}</b><span>Workers</span></div></div>
       <div><div class="eyebrow">Production cycle</div><div class="bar"><i style="width:${pct}%"></i></div></div>${depositHtml(selectedIdx)}
-${perDayHtml(d, tier, recipe)}`;
+${perDayHtml(d, tier, recipe, w.work_speed(selectedIdx))}`;
   } else if (d.housing) html += `<div class="stats"><div class="stat"><b>${icon('house', 20)} ${f[o + 9]} / ${d.housing * (tier + 1)}</b><span>Residents</span></div></div><p class="muted">Residents walk the village paths to their workplaces each day.</p>`;
   if (kind === 15) html += `<p class="muted">Raises storage to ${600 + 200 * tier} per resource and expands your border.</p><h3>Diplomacy</h3><p class="muted">Envoys, treaties, trade and war are handled from the town hall.</p><button class="pbtn primary" data-act="diplomacy">Open diplomacy</button>`;
   if (kind === 15) html += kingdomRoadsHtml(stocks);
@@ -2897,22 +2897,22 @@ ${perDayHtml(d, tier, recipe)}`;
   if (tier < defs[kind].maxTier) {
     const uc = upgrade_cost_flat(kind, tier + 1), cost: [number, number][] = []; for (let i = 0; i < uc.length; i += 2) cost.push([uc[i], uc[i + 1]]);
     const ok = cost.every(([r, n]) => stocks[r] >= n);
-    html += `<div class="actbar">${repairHtml}<div class="act-sec"><h3>Upgrade to ${tierName(kind, tier + 1)}</h3><div class="cost">${ui.costHtml(cost, stocks)}</div>${upgradeGainsHtml(kind, tier, hp[selectedIdx * 3 + 1], recipe)}<button class="pbtn primary" data-act="upgrade" ${ok ? '' : 'disabled'}>${ok ? 'Upgrade' : 'Not enough resources'}</button></div></div>`;
+    html += `<div class="actbar">${repairHtml}<div class="act-sec"><h3>Upgrade to ${tierName(kind, tier + 1)}</h3><div class="cost">${ui.costHtml(cost, stocks)}</div>${upgradeGainsHtml(kind, tier, hp[selectedIdx * 3 + 1], recipe, w.work_speed(selectedIdx))}<button class="pbtn primary" data-act="upgrade" ${ok ? '' : 'disabled'}>${ok ? 'Upgrade' : 'Not enough resources'}</button></div></div>`;
   } else html += `<div class="actbar">${repairHtml}<p><b>Fully upgraded.</b></p></div>`;
   html += optionsHtml(selectedIdx, kind, tier, stocks, kind === 47 ? 'Upgrades' : 'Design options');
   ui.setSelectedPane(html, kind !== 15 ? demolitionTip(w, selectedIdx) : '');
 }
 
 /** What pressing Upgrade on a building would change: each line is "what: now → after", so the player knows exactly what the cost buys. Mirrors the tier rules of the core (see `staffing`, `max_hp`, `storage_cap`). */
-function upgradeGainsHtml(kind: number, tier: number, maxHp: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }): string {
+function upgradeGainsHtml(kind: number, tier: number, maxHp: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }, speed = 100): string {
   const d = defs[kind], t1 = tier + 1;
   const rows: [string, string, string][] = [];
   const io = (a: [number, number][]) => a.map(([r, n]) => `${resIcon(r)} ${n}`).join(' ');
   const hp1 = maxHp * (1 + 0.8 * t1) / (1 + 0.8 * tier);
   rows.push(['Health', `${Math.round(maxHp)}`, `${Math.round(hp1)}`]);
   if (d.cycle && recipe.outputs.length) {
-    rows.push(['Makes per day', io(perDay(d, recipe.outputs, tier)), io(perDay(d, recipe.outputs, t1))]);
-    if (recipe.inputs.length) rows.push(['Uses per day', io(perDay(d, recipe.inputs, tier)), io(perDay(d, recipe.inputs, t1))]);
+    rows.push(['Makes per day', io(perDay(d, recipe.outputs, tier, speed)), io(perDay(d, recipe.outputs, t1, speed))]);
+    if (recipe.inputs.length) rows.push(['Uses per day', io(perDay(d, recipe.inputs, tier, speed)), io(perDay(d, recipe.inputs, t1, speed))]);
   }
   if (d.jobs > 0) rows.push(['Workers', `${d.jobs * (tier + 1)}`, `${d.jobs * (tier + 2)}`]);
   if (d.housing > 0) rows.push(['Housing', `${d.housing * (tier + 1)} people`, `${d.housing * (tier + 2)} people`]);
