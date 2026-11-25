@@ -3,7 +3,7 @@ import { downloadBackup, restoreBackup } from '../backup';
 import { icon } from './icons';
 
 interface Row { key: keyof Settings; label: string; hint: string; kind: 'select' | 'toggle' | 'range'; options?: [string, string][]; min?: number; max?: number; step?: number }
-const ROWS: { sec: 'display' | 'game'; title: string; rows: Row[] }[] = [
+const ROWS: { sec: 'display' | 'game' | 'controls'; title: string; rows: Row[] }[] = [
   { sec: 'display', title: 'Performance', rows: [
     { key: 'quality', label: 'Quality preset', hint: 'Sets most of the options below at once. Change any of them and it becomes Custom.', kind: 'select', options: [['low', 'Low: smooth on weak computers'], ['medium', 'Medium'], ['high', 'High (default)'], ['ultra', 'Ultra: for strong graphics cards'], ['custom', 'Custom']] },
     { key: 'fpsCap', label: 'Frame rate limit', hint: 'Lower limits save battery and keep a laptop cool.', kind: 'select', options: [['0', 'Unlimited (screen speed)'], ['60', '60 per second'], ['30', '30 per second']] },
@@ -27,6 +27,9 @@ const ROWS: { sec: 'display' | 'game'; title: string; rows: Row[] }[] = [
     { key: 'crowds', label: 'People, soldiers and animals', hint: 'The moving figures. Turning them off does not change the game, only what you see.', kind: 'toggle' },
     { key: 'googlyEyes', label: 'Googly Eyes', hint: 'Give animals oversized eyes that seem to look in two directions at once.', kind: 'toggle' },
   ] },
+  { sec: 'controls', title: 'Camera', rows: [
+    { key: 'cameraSpeed', label: 'Camera speed', hint: 'How fast the keys move, turn, tilt and zoom the camera.', kind: 'range', min: 0.5, max: 2, step: 0.1 },
+  ] },
   { sec: 'game', title: 'Raids', rows: [
     { key: 'jumpToRaiders', label: 'Jump to raiders', hint: 'When raiders attack your village, the camera moves to them by itself at the start of the fight (the red banner also takes you there when you click it).', kind: 'toggle' },
     { key: 'pauseForRaids', label: 'Pause at bandit warnings', hint: 'Pause your village when a bandit warning begins, giving you time to check defences and resume the countdown.', kind: 'toggle' },
@@ -42,7 +45,7 @@ export function mountSettings(root: HTMLElement, askReload: () => void, watchOwn
       : `<input type="range" id="${id}" min="${r.min}" max="${r.max}" step="${r.step}"><output id="${id}-v"></output>`;
     return `<label class="setrow" for="${id}"><span><b>${r.label}</b><small>${r.hint}</small></span>${ctl}</label>`;
   }).join('');
-  root.innerHTML = '<section data-sec="display" hidden>' + ROWS.filter(g => g.sec === 'display').map(group).join('') + `<div class="btnrow"><button class="pbtn" id="set-reset">Back to defaults</button><button class="pbtn" id="set-reload" hidden>Reload now to apply</button></div></section><section data-sec="game" hidden>${ROWS.filter(g => g.sec === 'game').map(group).join('')}</section><section data-sec="data" hidden><h3>Network</h3><p class="muted">Players connect directly to each other. If a friend cannot connect (strict office or mobile network), a TURN relay server helps. Optional; applies after a reload.</p>
+  root.innerHTML = '<section data-sec="display" hidden>' + ROWS.filter(g => g.sec === 'display').map(group).join('') + `<div class="btnrow"><button class="pbtn" id="set-reset">Back to defaults</button><button class="pbtn" id="set-reload" hidden>Reload now to apply</button></div></section><section data-sec="game" hidden>${ROWS.filter(g => g.sec === 'game').map(group).join('')}</section><section data-sec="controls" hidden>${ROWS.filter(g => g.sec === 'controls').map(group).join('')}</section><section data-sec="data" hidden><h3>Network</h3><p class="muted">Players connect directly to each other. If a friend cannot connect (strict office or mobile network), a TURN relay server helps. Optional; applies after a reload.</p>
     <label class="setrow"><span><b>TURN server</b><small>For example turn:turn.example.com:3478</small></span><input type="text" id="turn-urls" placeholder="turn:host:3478"></label>
     <label class="setrow"><span><b>User name</b></span><input type="text" id="turn-user" autocomplete="off"></label>
     <label class="setrow"><span><b>Password</b></span><input type="password" id="turn-cred" autocomplete="off"></label>` + `<h3>Your data</h3><p class="muted">Your village and your signing key live only in this browser: clearing site data or switching computers loses them. Save a backup file now and then. <b>The file holds your private key: keep it to yourself.</b></p>
@@ -64,7 +67,7 @@ export function mountSettings(root: HTMLElement, askReload: () => void, watchOwn
     setSettings({ [key]: v } as Partial<Settings>);
     if (key === 'antialias') { root.querySelector<HTMLElement>('#set-reload')!.hidden = false; askReload(); }
   });
-  root.addEventListener('input', e => { const t = e.target as HTMLInputElement; if (t.id === 'set-resolution') root.querySelector<HTMLElement>('#set-resolution-v')!.textContent = `${Math.round(Number(t.value) * 100)}%`; });
+  root.addEventListener('input', e => { const t = e.target as HTMLInputElement; if (t.type === 'range' && t.id.startsWith('set-')) root.querySelector<HTMLElement>(`#${t.id}-v`)!.textContent = `${Math.round(Number(t.value) * 100)}%`; });
   root.querySelector<HTMLElement>('#set-reset')!.onclick = () => resetSettings();
   root.querySelector<HTMLElement>('#set-reload')!.onclick = () => location.reload();
   // the TURN relay lives apart from the other settings: it is a secret of this browser
