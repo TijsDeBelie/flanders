@@ -601,10 +601,10 @@ pub fn solid_radius_of(kind: u8, tier: u8) -> f32 { solid_radius(kind, tier) }
 #[wasm_bindgen]
 pub fn ring_radius_of(kind: u8, tier: u8) -> f32 { pathnet::ring_radius(kind, tier) }
 
-#[wasm_bindgen]
 /// A walkable deck as an oriented strip: the middle, the direction along it, half its length (it is 3.8 wide).
 pub(crate) struct Deck { x: f32, y: f32, ux: f32, uy: f32, half: f32 }
 
+#[wasm_bindgen]
 pub fn upgrade_cost_flat(kind: u8, new_tier: u8) -> Vec<i32> {
     match DEFS.get(kind as usize) {
         Some(_) => upgrade_cost_for(kind, new_tier).into_iter().flat_map(|(r, n)| [r as i32, n]).collect(),
