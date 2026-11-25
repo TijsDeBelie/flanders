@@ -602,6 +602,9 @@ pub fn solid_radius_of(kind: u8, tier: u8) -> f32 { solid_radius(kind, tier) }
 pub fn ring_radius_of(kind: u8, tier: u8) -> f32 { pathnet::ring_radius(kind, tier) }
 
 #[wasm_bindgen]
+/// A walkable deck as an oriented strip: the middle, the direction along it, half its length (it is 3.8 wide).
+pub(crate) struct Deck { x: f32, y: f32, ux: f32, uy: f32, half: f32 }
+
 pub fn upgrade_cost_flat(kind: u8, new_tier: u8) -> Vec<i32> {
     match DEFS.get(kind as usize) {
         Some(_) => upgrade_cost_for(kind, new_tier).into_iter().flat_map(|(r, n)| [r as i32, n]).collect(),
@@ -770,17 +773,18 @@ impl World {
         self.roads.clear();
         self.road_links.clear(); self.road_tier.clear();
         self.sync_road_conn();
+        let decks = self.decks();
         for i in 0..self.buildings.len() {
             let b = &self.buildings[i];
             if !roadline::has_stub(b.kind) { continue; }
             let (door, exit) = doors::door_world(b);
-            if (door.0 - exit.0).hypot(door.1 - exit.1) > 0.3 && self.leg_is_dry(door, exit) { self.roads.push([door.0, door.1, b.pad_h, exit.0, exit.1, b.pad_h]); self.road_links.push((i as u32, i as u32)); self.road_tier.push(0); }
+            if (door.0 - exit.0).hypot(door.1 - exit.1) > 0.3 && self.leg_is_dry_in(&decks, door, exit) { self.roads.push([door.0, door.1, b.pad_h, exit.0, exit.1, b.pad_h]); self.road_links.push((i as u32, i as u32)); self.road_tier.push(0); }
         }
         for e in self.road_edges() {
             let (ha, hb) = (self.buildings[e.a].pad_h, self.buildings[e.b].pad_h);
             let hs = self.grade_line(&e.pts, ha, hb);
             for (k, w) in e.pts.windows(2).enumerate() {
-                if self.leg_is_dry(w[0], w[1]) {
+                if self.leg_is_dry_in(&decks, w[0], w[1]) {
                     self.roads.push([w[0].0, w[0].1, hs[k], w[1].0, w[1].1, hs[k + 1]]);
                     self.road_links.push((e.a as u32, e.b as u32)); self.road_tier.push(self.edge_style(e.a, e.b).0);
                 }
@@ -826,21 +830,30 @@ impl World {
     }
 
     /// Is a straight leg of a route over dry, ordinary ground (not water and not a drawbridge deck)?
-    pub(crate) fn leg_is_dry(&self, a: (f32, f32), b: (f32, f32)) -> bool {
+    pub(crate) fn leg_is_dry(&self, a: (f32, f32), b: (f32, f32)) -> bool { self.leg_is_dry_in(&self.decks(), a, b) }
+
+    /// `leg_is_dry` against decks already gathered with `decks()`: the road rebuild asks about thousands of legs, and must not walk the whole building list for every sample point.
+    pub(crate) fn leg_is_dry_in(&self, decks: &[Deck], a: (f32, f32), b: (f32, f32)) -> bool {
         let l = (b.0 - a.0).hypot(b.1 - a.1); let st = (l / 1.5).ceil().max(1.0) as i32;
-        (0..=st).all(|q| { let t = q as f32 / st as f32; let (x, y) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t); !self.natural_water_covers(x, y, self.height_ground(x, y), 0.2) && !self.on_deck(x, y) })
+        (0..=st).all(|q| { let t = q as f32 / st as f32; let (x, y) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t); !self.natural_water_covers(x, y, self.height_ground(x, y), 0.2) && !Self::on_deck_in(decks, x, y) })
+    }
+
+    /// The decks that can be walked on right now: bridges, and drawbridges that are not drawn up.
+    pub(crate) fn decks(&self) -> Vec<Deck> {
+        self.buildings.iter().filter_map(|b| {
+            if b.kind == BRIDGE { let (ux, uy, l) = Self::bridge_dir(b); return Some(Deck { x: b.x, y: b.y, ux, uy, half: l / 2.0 }); }
+            if b.kind != DRAWBRIDGE || self.drawn_up(b) { return None; }
+            let a = b.rot as f32 * std::f32::consts::FRAC_PI_4; let (sx, sy) = (a.sin(), a.cos());
+            Some(Deck { x: b.x, y: b.y, ux: sx, uy: sy, half: 7.4 })
+        }).collect()
+    }
+
+    fn on_deck_in(decks: &[Deck], x: f32, y: f32) -> bool {
+        decks.iter().any(|d| { let (dx, dy) = (x - d.x, y - d.y); (dx * d.ux + dy * d.uy).abs() <= d.half && (dx * d.uy - dy * d.ux).abs() <= 1.9 })
     }
 
     /// Is the point on the deck of a lowered drawbridge?
-    fn on_deck(&self, x: f32, y: f32) -> bool {
-        if self.buildings.iter().any(|b| { if b.kind != BRIDGE { return false; } let (ux, uy, l) = Self::bridge_dir(b); let (dx, dy) = (x - b.x, y - b.y); (dx * ux + dy * uy).abs() <= l / 2.0 && (dx * uy - dy * ux).abs() <= 1.9 }) { return true; }
-        self.buildings.iter().any(|b| {
-            if b.kind != DRAWBRIDGE || self.drawn_up(b) { return false; }
-            let a = b.rot as f32 * std::f32::consts::FRAC_PI_4; let (sx, sy) = (a.sin(), a.cos());
-            let (dx, dy) = (x - b.x, y - b.y); let along = dx * sx + dy * sy; let across = dx * sy - dy * sx;
-            along.abs() <= 7.4 && across.abs() <= 1.9
-        })
-    }
+    fn on_deck(&self, x: f32, y: f32) -> bool { Self::on_deck_in(&self.decks(), x, y) }
 
     /// Recompute derived data after the building list or tiers changed.
     fn after_change(&mut self) {
@@ -1722,6 +1735,16 @@ impl World {
         if k == FARM { self.terrain_ver += 1; }   // a bigger farm works more fields: the ground is levelled under them too, so everything standing near must be fitted to it again
         self.after_change();
         0
+    }
+
+    /// Upgrade several buildings in the order given: what `upgrade` returns for each. The roads are worked out once at the end instead of after every one, which keeps upgrading a whole
+    /// selection quick in a big village. The result is the same as upgrading one by one (peers replay them one by one), because `upgrade` never reads what `after_change` derives.
+    pub fn upgrade_batch(&mut self, idxs: &[u32]) -> Vec<i32> {
+        self.defer_roads = true;
+        let out: Vec<i32> = idxs.iter().map(|&i| self.upgrade(i)).collect();
+        self.defer_roads = false;
+        self.after_change();
+        out
     }
 
     /// Choose the village's flag: 0 for none, otherwise a packed flag number (pattern, three colours, emblem; bit 24 always set). Free, and changeable. Anything else is refused.
@@ -4363,6 +4386,24 @@ mod road_tests {
 #[cfg(test)]
 mod perf_tests {
     use super::*;
+    #[test]
+    fn upgrade_batch_matches_upgrading_one_by_one() {
+        let make = || {
+            let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0);
+            for _ in 0..3 { w.upgrade(0); }
+            for i in 0..30 { let a = i as f32 * 0.9; let r = 16.0 + (i % 6) as f32 * 4.0; w.place(HOUSE, (a.cos() * r).round() as i32, (a.sin() * r).round() as i32, 0); }
+            w
+        };
+        let (mut a, mut b) = (make(), make());
+        let idxs: Vec<u32> = (1..a.buildings.len() as u32).collect();
+        let one: Vec<i32> = idxs.iter().map(|&i| a.upgrade(i)).collect();
+        let many = b.upgrade_batch(&idxs);
+        assert_eq!(one, many);
+        assert!(many.iter().any(|&c| c == 0));
+        assert_eq!(a.state_hash(), b.state_hash());
+        assert_eq!(a.roads, b.roads);
+    }
+
     #[test]
     fn many_buildings_stay_fast() {
         let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0);
