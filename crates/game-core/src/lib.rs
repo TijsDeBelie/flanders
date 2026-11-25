@@ -2453,12 +2453,14 @@ impl World {
         if kind == FARM { 100 + if ob & 1 != 0 { 10 } else { 0 } + if ob & 4 != 0 { 5 } else { 0 } + if ob & 8 != 0 { 10 } else { 0 } + tier2_speed(kind, ob) }
         else if ob != 0 && !matches!(kind, HOUSE | WALL | TOWER | GATE | DRAWBRIDGE | BARRACKS | KEEP | TOWN_HALL | CHAPEL | WELL | BRIDGE | HOSPITAL | GRAVEYARD) { 100 + if ob & 4 != 0 { 10 } else { 0 } + if ob & 8 != 0 { 5 } else { 0 } + tier2_speed(kind, ob) } else { 100 }   // scarecrow, fence and barn; awning and stone footing: the building works that much faster
     }
-    /// The building's work pace in percent: its design upgrades (see `work_boost`), halved while no road joins it to the castle. 100 for a plain, roaded building. Staffing is not in it.
-    pub fn work_speed(&self, idx: u32) -> u32 {
-        let i = idx as usize; if i >= self.buildings.len() { return 100; }
+    /// What sets the building's work pace, each in percent (100 = no effect): [design upgrades, road to the castle (50 with none), how fully it is staffed].
+    pub fn work_pace(&self, idx: u32) -> Vec<u32> {
+        let i = idx as usize; if i >= self.buildings.len() { return vec![100, 100, 100]; }
         let road = if self.road_served(i, &self.road_reach()) { 100 } else { roadnet::UNROADED_PACE };
-        self.work_boost(i) * road / 100
+        vec![self.work_boost(i), road, self.buildings[i].beff.min(100)]
     }
+    /// The building's whole work pace in percent: the three parts of `work_pace` multiplied.
+    pub fn work_speed(&self, idx: u32) -> u32 { self.work_pace(idx).iter().product::<u32>() / 10_000 }
     /// What the building at `idx` works: [deposit index, remaining, maximum, dormant 0/1, ore taken per day at its present staffing], or empty when it needs no deposit.
     pub fn building_deposit(&self, idx: u32) -> Vec<f32> {
         let Some(b) = self.buildings.get(idx as usize) else { return vec![] };
@@ -2466,7 +2468,7 @@ impl World {
         if d.req != 1 || b.aux < 0 { return vec![]; }
         let Some(dep) = self.deposits.get(b.aux as usize) else { return vec![] };
         let mult = 4 + 5 * b.tier as i32; let out: i32 = d.outputs.iter().map(|&(_, n)| ((n * mult + 2) / 4).max(n)).sum();
-        let eff = b.beff as f32 / 100.0 * self.work_speed(idx) as f32 / 100.0;
+        let eff = self.work_speed(idx) as f32 / 100.0;
         vec![b.aux as f32, dep.rem as f32, dep.max as f32, dep.asleep as u8 as f32, out as f32 * DAY as f32 / d.cycle as f32 * eff]
     }
     /// Once a day every deposit regrows a little, faster when no working building stands at it; one used up and dormant wakes at `WAKE_PCT` of its maximum. Cleared deposits (`max == 0`) stay gone.
