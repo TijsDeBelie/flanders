@@ -7,20 +7,32 @@ export class Sound {
   private fireGain: GainNode | null = null; private fireLevel = 0;
   private battleOn = false; private battleT = 0; private birdT = 0;
   muted = localStorage.getItem('flanders:muted') === '1';
-  volume = 0.7;
+  volume = Math.min(1, Math.max(0, Number(localStorage.getItem('flanders:volume') ?? 0.7)));
+  /** Silence the game while its tab is in the background. */
+  muteHidden = localStorage.getItem('flanders:mutehidden') === '1';
+  private hidden = false;
 
   /** Must be called from a user gesture (a click) the first time. */
   start() {
     if (this.ctx) { void this.ctx.resume(); return; }
     const AC = window.AudioContext || (window as any).webkitAudioContext; if (!AC) return;
-    this.ctx = new AC(); this.master = this.ctx.createGain(); this.master.gain.value = this.muted ? 0 : this.volume * 0.5; this.master.connect(this.ctx.destination);
+    this.ctx = new AC(); this.master = this.ctx.createGain(); this.master.gain.value = this.level(); this.master.connect(this.ctx.destination);
     const n = this.ctx.sampleRate * 2, buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0); let last = 0;
     for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = last * 3.5; } // brown-ish noise
     this.noiseBuf = buf;
     this.wind(); this.fireBed();
   }
 
-  setMuted(m: boolean) { this.muted = m; localStorage.setItem('flanders:muted', m ? '1' : '0'); if (this.ctx) this.master.gain.setTargetAtTime(m ? 0 : this.volume * 0.5, this.ctx.currentTime, 0.05); }
+  private level() { return this.muted || (this.muteHidden && this.hidden) ? 0 : this.volume * 0.5; }
+  private apply() { if (this.ctx) this.master.gain.setTargetAtTime(this.level(), this.ctx.currentTime, 0.05); }
+  setMuted(m: boolean) { this.muted = m; localStorage.setItem('flanders:muted', m ? '1' : '0'); this.apply(); }
+  setVolume(v: number) { this.volume = Math.min(1, Math.max(0, v)); localStorage.setItem('flanders:volume', String(this.volume)); this.apply(); }
+  setMuteHidden(on: boolean) {
+    this.muteHidden = on; localStorage.setItem('flanders:mutehidden', on ? '1' : '0');
+    if (!this.watching) { this.watching = true; document.addEventListener('visibilitychange', () => { this.hidden = document.hidden; this.apply(); }); }
+    this.hidden = document.hidden; this.apply();
+  }
+  private watching = false;
 
   private noise(loop = true) { const s = this.ctx!.createBufferSource(); s.buffer = this.noiseBuf; s.loop = loop; return s; }
 

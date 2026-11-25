@@ -3,23 +3,23 @@ import { downloadBackup, restoreBackup } from '../backup';
 import { icon } from './icons';
 
 interface Row { key: keyof Settings; label: string; hint: string; kind: 'select' | 'toggle' | 'range'; options?: [string, string][]; min?: number; max?: number; step?: number }
-const ROWS: { title: string; rows: Row[] }[] = [
-  { title: 'Overall', rows: [
+const ROWS: { sec: 'display' | 'game'; title: string; rows: Row[] }[] = [
+  { sec: 'display', title: 'Performance', rows: [
     { key: 'quality', label: 'Quality preset', hint: 'Sets most of the options below at once. Change any of them and it becomes Custom.', kind: 'select', options: [['low', 'Low: smooth on weak computers'], ['medium', 'Medium'], ['high', 'High (default)'], ['ultra', 'Ultra: for strong graphics cards'], ['custom', 'Custom']] },
     { key: 'fpsCap', label: 'Frame rate limit', hint: 'Lower limits save battery and keep a laptop cool.', kind: 'select', options: [['0', 'Unlimited (screen speed)'], ['60', '60 per second'], ['30', '30 per second']] },
-    { key: 'showPaths', label: 'Show walking paths', hint: 'Draws the invisible path network as red lines (bright on roads): where soldiers and villagers may walk. For checking how they get about.', kind: 'toggle' },
-    { key: 'jumpToRaiders', label: 'Jump to raiders', hint: 'When raiders attack your village, the camera moves to them by itself at the start of the fight (the red banner also takes you there when you click it).', kind: 'toggle' },
-    { key: 'pauseForRaids', label: 'Pause at bandit warnings', hint: 'Pause your village when a bandit warning begins, giving you time to check defences and resume the countdown.', kind: 'toggle' },
-    { key: 'showFps', label: 'Show frame rate', hint: 'The small counter in the corner (also F3 for details).', kind: 'toggle' },
   ] },
-  { title: 'Image', rows: [
+  { sec: 'display', title: 'Overlays', rows: [
+    { key: 'showFps', label: 'Show frame rate', hint: 'The small counter in the corner (also F3 for details).', kind: 'toggle' },
+    { key: 'showPaths', label: 'Show walking paths', hint: 'Draws the invisible path network as red lines (bright on roads): where soldiers and villagers may walk. For checking how they get about.', kind: 'toggle' },
+  ] },
+  { sec: 'display', title: 'Image', rows: [
     { key: 'resolution', label: 'Resolution', hint: 'How many pixels are drawn. Lower is much faster; above 100% is sharper but slow.', kind: 'range', min: 0.5, max: 1.5, step: 0.05 },
     { key: 'adaptive', label: 'Adjust resolution automatically', hint: 'Drops the resolution a little when the game runs slowly and brings it back when there is room.', kind: 'toggle' },
     { key: 'antialias', label: 'Smooth edges (anti-aliasing)', hint: 'Removes jagged edges. Changing it needs a reload of the page.', kind: 'toggle' },
     { key: 'shadows', label: 'Shadows', hint: 'Shadow quality. Off is the biggest single speed-up.', kind: 'select', options: [['0', 'Off'], ['1024', 'Low'], ['2048', 'Medium'], ['4096', 'High']] },
     { key: 'waterFx', label: 'Glossy water', hint: 'Reflective water surface.', kind: 'toggle' },
   ] },
-  { title: 'World', rows: [
+  { sec: 'display', title: 'World', rows: [
     { key: 'trees', label: 'Trees', hint: 'Forests. Without them the land is bare but much faster.', kind: 'toggle' },
     { key: 'treeDetail', label: 'Detailed trees nearby', hint: 'Rich trees close to the camera, simple ones further away.', kind: 'toggle' },
     { key: 'drawDistance', label: 'Draw distance', hint: 'How far away forests are drawn.', kind: 'select', options: [['450', 'Short'], ['750', 'Medium'], ['1300', 'Long'], ['2600', 'Very long']] },
@@ -27,17 +27,22 @@ const ROWS: { title: string; rows: Row[] }[] = [
     { key: 'crowds', label: 'People, soldiers and animals', hint: 'The moving figures. Turning them off does not change the game, only what you see.', kind: 'toggle' },
     { key: 'googlyEyes', label: 'Googly Eyes', hint: 'Give animals oversized eyes that seem to look in two directions at once.', kind: 'toggle' },
   ] },
+  { sec: 'game', title: 'Raids', rows: [
+    { key: 'jumpToRaiders', label: 'Jump to raiders', hint: 'When raiders attack your village, the camera moves to them by itself at the start of the fight (the red banner also takes you there when you click it).', kind: 'toggle' },
+    { key: 'pauseForRaids', label: 'Pause at bandit warnings', hint: 'Pause your village when a bandit warning begins, giving you time to check defences and resume the countdown.', kind: 'toggle' },
+  ] },
 ];
 
 /** Build the display settings panel into `root`. It stays in step with the settings (a preset changes several controls at once). */
 export function mountSettings(root: HTMLElement, askReload: () => void, watchOwn: () => void = () => {}, ask: (text: string) => Promise<boolean> = async () => true) {
-  root.innerHTML = '<section data-sec="display" hidden>' + ROWS.map(g => `<h3>${g.title}</h3>` + g.rows.map(r => {
+  const group = (g: typeof ROWS[number]) => `<h3>${g.title}</h3>` + g.rows.map(r => {
     const id = `set-${r.key}`;
     const ctl = r.kind === 'select' ? `<select id="${id}">${r.options!.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>`
       : r.kind === 'toggle' ? `<input type="checkbox" id="${id}">`
       : `<input type="range" id="${id}" min="${r.min}" max="${r.max}" step="${r.step}"><output id="${id}-v"></output>`;
     return `<label class="setrow" for="${id}"><span><b>${r.label}</b><small>${r.hint}</small></span>${ctl}</label>`;
-  }).join('')).join('') + `<div class="btnrow"><button class="pbtn" id="set-reset">Back to defaults</button><button class="pbtn" id="set-reload" hidden>Reload now to apply</button></div></section><section data-sec="data" hidden><h3>Network</h3><p class="muted">Players connect directly to each other. If a friend cannot connect (strict office or mobile network), a TURN relay server helps. Optional; applies after a reload.</p>
+  }).join('');
+  root.innerHTML = '<section data-sec="display" hidden>' + ROWS.filter(g => g.sec === 'display').map(group).join('') + `<div class="btnrow"><button class="pbtn" id="set-reset">Back to defaults</button><button class="pbtn" id="set-reload" hidden>Reload now to apply</button></div></section><section data-sec="game" hidden>${ROWS.filter(g => g.sec === 'game').map(group).join('')}</section><section data-sec="data" hidden><h3>Network</h3><p class="muted">Players connect directly to each other. If a friend cannot connect (strict office or mobile network), a TURN relay server helps. Optional; applies after a reload.</p>
     <label class="setrow"><span><b>TURN server</b><small>For example turn:turn.example.com:3478</small></span><input type="text" id="turn-urls" placeholder="turn:host:3478"></label>
     <label class="setrow"><span><b>User name</b></span><input type="text" id="turn-user" autocomplete="off"></label>
     <label class="setrow"><span><b>Password</b></span><input type="password" id="turn-cred" autocomplete="off"></label>` + `<h3>Your data</h3><p class="muted">Your village and your signing key live only in this browser: clearing site data or switching computers loses them. Save a backup file now and then. <b>The file holds your private key: keep it to yourself.</b></p>
