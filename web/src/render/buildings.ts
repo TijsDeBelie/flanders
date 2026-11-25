@@ -504,11 +504,23 @@ const quarry: Model = b => {
 };
 
 const claypit: Model = b => {
-  const m = M();
-  b.cyl(3.2, 3.5, 0.12, m.clay, 0, -0.05, 0, 18); b.cyl(2.2, 2.2, 0.18, m.earth, 0.3, -0.08, 0.2, 16);
-  for (const [x, z, r] of [[-2.2, -1.5, 1.2], [2.3, -0.8, 0.9], [-0.6, 2.4, 0.8]] as const) b.dome(r, m.clay, x, 0, z, 0.7);
-  b.box(2.4, 1.8, 2, b.t >= 1 ? m.timber : m.wood, 2.4, 0, 2); b.gable(2.4, 2, 1.1, b.t >= 1 ? m.tile : m.thatch, 2.4, 1.8, 2, 0.3);
-  b.box(0.9, 0.5, 0.7, m.wood, -2.6, 0.2, 1.4); b.box(0.12, 1.1, 0.12, m.darkwood, -1.2, 0.2, 0);
+  const m = M(), t = b.t;
+  // a square-cut digging: a bank of earth round a wet clay floor, stepped clay faces behind it and a plank ramp down from the front
+  b.box(4.6, 0.1, 3.4, m.earth, -0.5, -0.04, -0.6, 0.08);
+  b.box(3.8, 0.16, 2.6, m.clay, -0.5, 0.0, -0.6, 0.08);
+  for (const [w, d, x, z] of [[4.8, 0.7, -0.5, -2.5], [0.7, 3.2, -3.0, -0.6], [0.7, 3.2, 2.0, -0.6], [1.8, 0.7, -2.0, 1.2], [1.8, 0.7, 0.9, 1.2]] as const) b.box(w, 0.42, d, m.mud, x, 0, z);
+  for (let i = 0; i < 3; i++) b.box(3.6 - i * 0.9, 0.34, 0.5, m.clay, -0.5, 0.3 + i * 0.34, -2.55 + i * 0.12);
+  const ramp = b.box(0.9, 0.08, 1.9, m.darkwood, -0.7, 0.12, 1.1); ramp.rotation.x = -0.18;
+  b.box(0.12, 1.1, 0.12, m.darkwood, 1.2, 0.2, -1.2); b.box(0.5, 0.1, 0.1, m.darkwood, 1.2, 1.2, -1.2);   // a shovel stuck in the clay
+  // raw clay bricks drying on a rack under a lean-to roof
+  for (const [x, z] of [[-3.4, 1.0], [-1.8, 1.0], [-3.4, 2.8], [-1.8, 2.8]] as const) b.box(0.14, 1.5, 0.14, m.darkwood, x, 0, z);
+  b.box(2.0, 0.1, 2.1, m.thatch, -2.6, 1.5, 1.9);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) b.box(0.55, 0.22, 0.34, m.clay, -2.9 + i * 0.6, 0.06 + (j % 2) * 0.25, 1.2 + Math.floor(j / 2) * 1.2);
+  // a wheelbarrow and a puddling trough
+  b.box(0.9, 0.3, 0.6, m.wood, -0.5, 0.35, 2.6); b.box(0.7, 0.1, 0.4, m.clay, -0.5, 0.65, 2.6);
+  b.box(0.1, 0.35, 0.1, m.darkwood, -0.1, 0, 2.3); b.box(0.1, 0.35, 0.1, m.darkwood, -0.1, 0, 2.9); b.cyl(0.22, 0.22, 0.08, m.iron, -1.05, 0.22, 2.6, 8).rotation.x = Math.PI / 2;
+  b.box(1.2, 0.5, 0.8, m.wood, 0.7, 0, 3.4); b.box(1.0, 0.1, 0.6, m.clay, 0.7, 0.5, 3.4);
+  b.box(2.4, 1.8, 2, t >= 1 ? m.timber : m.wood, 2.4, 0, 2); b.gable(2.4, 2, 1.1, t >= 1 ? m.tile : m.thatch, 2.4, 1.8, 2, 0.3);
 };
 
 const brickworks: Model = b => {
