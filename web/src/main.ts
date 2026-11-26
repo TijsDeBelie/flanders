@@ -9,9 +9,10 @@ import '@fontsource/alegreya-sans/700.css';
 import './ui/style.css';
 import './ui/mobile.css';
 import { sceneIsStill, skipFrame } from './idle';
+import { initViewport, viewW, viewH } from './viewport';
 import { initDevice, deviceClass, touchDefaults, touchLimits, isTouchDevice } from './device';
 import { seedMobilePrefs, initMobileUi } from './ui/mobile';
-{ const c = initDevice(); if (c !== 'desktop') seedMobilePrefs(c === 'phone'); }   // marks <body> as mobile/phone/tablet before the interface is built (the stylesheet follows those classes)
+{ const c = initDevice(); if (c !== 'desktop') seedMobilePrefs(c === 'phone'); initViewport(); }   // marks <body> as mobile/phone/tablet before the interface is built (the stylesheet follows those classes)
 import * as THREE from 'three';
 import init, { World, Ai, effect_radii, flammability_of, upgrade_cost_flat, road_resurface_cost_flat, village_sites, tunnels_flat, footprint_of, door_info, warm_navigation_step, world_restore, terrain_land_rows, trees_in_rows, trees_in_row_count, state_hash_part_names, rules_fingerprint, ledger_extra_names, military_upgrades } from './wasm/game_core.js';
 import { icon, unitIcon, type IconName } from './ui/icons';
@@ -1048,7 +1049,7 @@ function selectDets(ids: number[]) {
 /** Armies whose banner is inside the dragged rectangle (screen pixels). */
 function boxSelect(x0: number, y0: number, x1: number, y1: number, add = false) {
   const a = Math.min(x0, x1), b = Math.max(x0, x1), c = Math.min(y0, y1), d = Math.max(y0, y1), v = new THREE.Vector3();
-  const ids = lv.field.ids().filter(id => { const p = lv.field.position(id)!; v.set(p.x, terrain.heightAt(p.x, p.z) + 2, p.z).project(rig.cam); const sx = (v.x * 0.5 + 0.5) * innerWidth, sy = (-v.y * 0.5 + 0.5) * innerHeight; return v.z < 1 && sx >= a && sx <= b && sy >= c && sy <= d; });
+  const ids = lv.field.ids().filter(id => { const p = lv.field.position(id)!; v.set(p.x, terrain.heightAt(p.x, p.z) + 2, p.z).project(rig.cam); const sx = (v.x * 0.5 + 0.5) * viewW(), sy = (-v.y * 0.5 + 0.5) * viewH(); return v.z < 1 && sx >= a && sx <= b && sy >= c && sy <= d; });
   if (ids.length) { const all = add ? [...new Set([...multiDets, ...ids])] : ids; selectDets(all); ui.toast(all.length > 1 ? `${all.length} armies selected — right-click to march them all.` : 'Army selected.', 'info'); }
   else if (!add && multiDets.length) selectDets([]);   // a box round nothing lets go of the selection
 }
@@ -1056,7 +1057,7 @@ function boxSelect(x0: number, y0: number, x1: number, y1: number, add = false) 
 /** Armies shown on the screen, with where. */
 function armiesOnScreen() {
   const v = new THREE.Vector3(), out: { id: number; sx: number; sy: number }[] = [];
-  for (const id of lv.field.ids()) { const p = lv.field.position(id); if (!p) continue; v.set(p.x, terrain.heightAt(p.x, p.z) + 1.5, p.z).project(rig.cam); if (v.z < 1) out.push({ id, sx: (v.x * 0.5 + 0.5) * innerWidth, sy: (-v.y * 0.5 + 0.5) * innerHeight }); }
+  for (const id of lv.field.ids()) { const p = lv.field.position(id); if (!p) continue; v.set(p.x, terrain.heightAt(p.x, p.z) + 1.5, p.z).project(rig.cam); if (v.z < 1) out.push({ id, sx: (v.x * 0.5 + 0.5) * viewW(), sy: (-v.y * 0.5 + 0.5) * viewH() }); }
   return out;
 }
 /** Troops and the banner select their army. A small screen-space margin also helps with distant banners. */
@@ -1538,7 +1539,7 @@ async function startGame(name: string, username: string, pve = false) {
   if (touch && !softwareGpu && !playerChoseSettings()) { const { quality, ...rest } = touch; setSettings({ quality }, false); setSettings(rest, false); }   // two steps: a preset would overwrite the pixel cap
   renderer = new THREE.WebGLRenderer({ canvas: ui.canvas, antialias: wantAntialias(devicePixelRatio), powerPreference: 'high-performance' });
   if (softwareGpu) ui.toast(!autoLow ?'No graphics card is drawing the game (the browser draws it on the processor): the Low display preset runs much faster.' : 'No graphics card is drawing the game, so it starts on Low display settings. Change them under Settings.', 'info');
-  renderer.setPixelRatio(pixelRatio(devicePixelRatio, 1)); renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(pixelRatio(devicePixelRatio, 1)); renderer.setSize(viewW(), viewH());
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap; renderer.shadowMap.autoUpdate = false;   // Atmosphere schedules shadow redraws
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.72;
   scene = new THREE.Scene(); scene.matrixAutoUpdate = false;   // the scene itself never moves: with its matrix 'dirty' every frame, every object below was re-multiplied every frame
@@ -1641,7 +1642,7 @@ async function startGame(name: string, username: string, pve = false) {
   ui.setTab('build');
   ui.hint('Choose a building on the right, then click the ground. Start with houses and a farm.');
   setTimeout(() => ui.hint(null), 7000);
-  addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); });
+  addEventListener('resize', () => { renderer.setSize(viewW(), viewH()); });
   bindInput();
   watch.openSave(performance.now(), saved ? openedAt - saved.savedAt : 0);
   startVillageWatch();
@@ -1898,7 +1899,7 @@ function drawBattlefieldPins() {
     vtmp.set(pin.x, y, pin.z).project(rig.cam);
     const visible = !showroom && vtmp.z >= -1 && vtmp.z <= 1 && Math.abs(vtmp.x) < 1 && Math.abs(vtmp.y) < 1;
     el.hidden = !visible;
-    if (visible) el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * innerWidth)}px,${Math.round((-vtmp.y * 0.5 + 0.5) * innerHeight)}px) translate(-50%,-100%)`;
+    if (visible) el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * viewW())}px,${Math.round((-vtmp.y * 0.5 + 0.5) * viewH())}px) translate(-50%,-100%)`;
   }
 }
 
@@ -2084,7 +2085,7 @@ function updateBossBar() {
   vtmp.set(b.x, b.y, b.z).project(rig.cam);
   const on = vtmp.z < 1 && Math.abs(vtmp.x) < 1.1 && Math.abs(vtmp.y) < 1.1;
   if (bossBarEl.hidden === on) bossBarEl.hidden = !on; if (!on) return;
-  bossBarEl.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * innerWidth)}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * innerHeight)}px) translate(-50%, -100%)`;
+  bossBarEl.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * viewW())}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * viewH())}px) translate(-50%, -100%)`;
   const title = bossTitle(bosses, b.boss, b.name), name = bossBarEl.firstElementChild as HTMLElement; if (name.textContent !== title) name.textContent = title;
   bossFill ??= bossBarEl.querySelector('b') as HTMLElement;
   const w = Math.round(Math.max(0, Math.min(1, b.hp / b.max)) * 100) + '%'; if (bossFill.style.width !== w) bossFill.style.width = w;
@@ -2109,7 +2110,7 @@ function updateUnitBars() {
     if (el.hidden) el.hidden = false;
     const foe = u.side === 1, w = Math.round(Math.max(0, Math.min(1, u.hp / u.max)) * 100) + '%';
     if (el.dataset.f !== String(foe)) { el.dataset.f = String(foe); el.classList.toggle('foe', foe); }
-    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * innerWidth)}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * innerHeight)}px) translate(-50%, -100%)`;   // a transform: no layout
+    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * viewW())}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * viewH())}px) translate(-50%, -100%)`;   // a transform: no layout
     const fill = el.firstElementChild as HTMLElement; if (fill.style.width !== w) fill.style.width = w;
     n++;
   }
@@ -2142,7 +2143,7 @@ function updateFoeArrow() {
   for (const v of allVillages()) { if (!v.world.battle_active() || v.world.battle_lair().length) continue; const c = foeCentroid(battleUnits(v.world)); if (c) { target = { v, x: c.x, z: c.z }; break; } }
   if (!target) { if (foeArrowEl) foeArrowEl.hidden = true; return; }
   vtmp.set(target.x, terrain.heightAt(target.x, target.z), target.z).project(rig.cam);
-  const e = edgeArrow((vtmp.x * 0.5 + 0.5) * innerWidth, (-vtmp.y * 0.5 + 0.5) * innerHeight, innerWidth, innerHeight, vtmp.z > 1);
+  const e = edgeArrow((vtmp.x * 0.5 + 0.5) * viewW(), (-vtmp.y * 0.5 + 0.5) * viewH(), viewW(), viewH(), vtmp.z > 1);
   if (!foeArrowEl) { foeArrowEl = document.createElement('div'); foeArrowEl.id = 'foearrow'; foeArrowEl.title = 'The attackers are this way: click to look at them'; foeArrowEl.textContent = '➤'; document.body.appendChild(foeArrowEl); foeArrowEl.onclick = () => { if (foeArrowVillage) lookAtAttackers(foeArrowVillage); }; }
   foeArrowVillage = target.v;   // (the click handler reads this: no new closure every frame)
   foeArrowEl.hidden = !e; if (!e) return;
@@ -2658,7 +2659,7 @@ function updateCovLabels() {
     if (!l.on) { if (!l.el.hidden) l.el.hidden = true; continue; }
     cvec.set(l.x, terrain.heightAt(l.x, l.z) + 1, l.z).project(rig.cam);
     const on = cvec.z < 1 && Math.abs(cvec.x) < 1 && Math.abs(cvec.y) < 1; l.el.hidden = !on; if (!on) continue;
-    l.el.style.left = Math.round((cvec.x * 0.5 + 0.5) * innerWidth) + 'px'; l.el.style.top = Math.round((-cvec.y * 0.5 + 0.5) * innerHeight) + 'px';
+    l.el.style.left = Math.round((cvec.x * 0.5 + 0.5) * viewW()) + 'px'; l.el.style.top = Math.round((-cvec.y * 0.5 + 0.5) * viewH()) + 'px';
   }
 }
 /** The radii of a building as lines with icons, for its panel. */
@@ -3932,7 +3933,7 @@ function updateLabels() {
     const person = lv.people.villager(followedVillager);
     if (person && !lv.people.hidden) {
       vtmp.set(person.x, terrain.walkAt(person.x, person.z) + 2 * person.scale, person.z).project(rig.cam);
-      ui.moveFollowMarker((vtmp.x + 1) * innerWidth / 2, (1 - vtmp.y) * innerHeight / 2, vtmp.z < 1 && Math.abs(vtmp.x) < 1 && Math.abs(vtmp.y) < 1);
+      ui.moveFollowMarker((vtmp.x + 1) * viewW() / 2, (1 - vtmp.y) * viewH() / 2, vtmp.z < 1 && Math.abs(vtmp.x) < 1 && Math.abs(vtmp.y) < 1);
     } else ui.moveFollowMarker(0, 0, false);
   }
   if (!showDeposits) return;
@@ -3945,7 +3946,7 @@ function updateLabels() {
     if (el.hidden !== hide) el.hidden = hide;
     if (hide) continue;
     // moved with a transform (no layout), and the text, class and tooltip are written only when they change, not every frame
-    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * innerWidth)}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * innerHeight)}px) translate(-50%, -100%)`;
+    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * viewW())}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * viewH())}px) translate(-50%, -100%)`;
     const dormant = asleep[i] === 1, text = depositLabel(DEPOSIT[flat[i * 5]].name, { rem, max: flat[i * 5 + 4], asleep: dormant });
     if (el.dataset.t !== text) { el.dataset.t = text; (el.firstElementChild as HTMLElement).textContent = text; }
     if (el.dataset.a !== String(dormant)) {
@@ -3989,7 +3990,7 @@ function updateHallLabels(all: Village[]) {
     vtmp.set(hx, terrain.heightAt(hx, hz) + 7 + tier * 3.5, hz).project(rig.cam);
     const on = vtmp.z < 1 && Math.abs(vtmp.x) < 1 && Math.abs(vtmp.y) < 1 && rig.dist > 28;
     el.hidden = !on; if (!on) continue;
-    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * innerWidth)}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * innerHeight)}px) translate(-50%, -100%)`;
+    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * viewW())}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * viewH())}px) translate(-50%, -100%)`;
     const key = `${v.mine}|${tier}|${v.name}`;   // the label's HTML (icon included) is rebuilt only when one of these changes, not every frame
     if (el.dataset.k !== key) { el.dataset.k = key; el.innerHTML = `${icon(v.mine ? 'castle' : 'attack', 18)}<b>${esc(v.name)}</b><span>${tierName(15, tier).toUpperCase()}</span>`; }
   }
@@ -4012,7 +4013,7 @@ function updateJourneyLabels() {
     vtmp.set(l.x, l.y, l.z).project(rig.cam);
     const on = vtmp.z < 1 && Math.abs(vtmp.x) < 1 && Math.abs(vtmp.y) < 1 && rig.dist < 220;
     el.hidden = !on; if (!on) continue;
-    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * innerWidth)}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * innerHeight)}px) translate(-50%, -100%)`;
+    el.style.transform = `translate(${Math.round((vtmp.x * 0.5 + 0.5) * viewW())}px, ${Math.round((-vtmp.y * 0.5 + 0.5) * viewH())}px) translate(-50%, -100%)`;
     if (el.textContent !== l.text) { el.textContent = l.text; el.dataset.kind = String(l.kind); }
   }
   for (const [id, el] of [...journeyLabels]) if (!live.has(id)) { el.remove(); journeyLabels.delete(id); }
@@ -4218,7 +4219,7 @@ function frame(now: number) {
   const treeShadowRange = !s.shadows ? 0 : rig.dist <= 175 ? 135 : rig.pitch < 0.5 ? 65 : 85;
   perf.start('forest'); forest.tick(sceneTime, rig.cam.position, rig.target, treeShadowRange, rig.cam); perf.stop('forest');
   if (forestShadowVersion !== forest.shadowVersion) { forestShadowVersion = forest.shadowVersion; if (forest.group.visible) atmo.invalidateShadows(); }
-  const detailRange = innerHeight * 1.65 / (2 * Math.tan(THREE.MathUtils.degToRad(rig.cam.fov / 2)) * 36);
+  const detailRange = viewH() * 1.65 / (2 * Math.tan(THREE.MathUtils.degToRad(rig.cam.fov / 2)) * 36);
   // villagers and soldiers are only drawn near the camera target (`view` below): a village whose edge is well beyond that moves its people a few times a second, not every frame
   const crowdView = Math.max(90, rig.dist * 1.7 + 50) + 60;
   perf.start('villages (people, army)'); all.forEach(v => v.frame(v === replay?.target ? replayDt : worldDt, v === lv ? speed : 1, rig.cam.position, detailRange, drawCrowd, Math.hypot(v.ox - rig.target.x, v.oz - rig.target.z) - v.radius < crowdView)); perf.stop('villages (people, army)');

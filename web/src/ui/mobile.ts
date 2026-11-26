@@ -26,9 +26,46 @@ export function initMobileUi() {
   /** Where the panel covers the ground and so folds by itself: on a phone, as a sheet or a side panel (too narrow a screen to share). A tablet's side panel stays. */
   const covers = () => phone();
 
+  const tabs = document.getElementById('tabs')!;
+
+  // the grab handle: drag the tab bar up to open the sheet, down to fold it. The sheet follows the finger, and lands open or folded by where it was let go
+  // (or by a quick flick). A drag is not a tap: the click that follows it is swallowed before the tabs see it.
+  let drag: { id: number; y0: number; t0: number; base: number; span: number; pos: number; moved: boolean } | null = null, swallow = false;
+  tabs.addEventListener('click', e => { if (swallow) { swallow = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  tabs.addEventListener('pointerdown', e => {
+    if (!sheet() || e.pointerType === 'mouse' || drag) return;
+    const peek = tabs.offsetHeight + (parseFloat(getComputedStyle(ledger).paddingBottom) || 0);
+    const span = Math.max(0, ledger.offsetHeight - peek);
+    drag = { id: e.pointerId, y0: e.clientY, t0: performance.now(), base: open() ? 0 : span, span, pos: open() ? 0 : span, moved: false };
+    swallow = false;
+  });
+  tabs.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dy = e.clientY - drag.y0;
+    if (!drag.moved) {
+      if (Math.abs(dy) < 8) return;
+      drag.moved = true; ledger.classList.add('dragging');
+      try { tabs.setPointerCapture(e.pointerId); } catch { /* the finger already left */ }
+    }
+    drag.pos = Math.min(drag.span, Math.max(0, drag.base + dy));
+    ledger.style.transform = `translateY(${drag.pos}px)`;
+  });
+  const endDrag = (e: PointerEvent) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag; drag = null;
+    if (!d.moved) return;
+    const v = (d.pos - d.base) / Math.max(1, performance.now() - d.t0);   // px per ms; a flick decides even a short drag
+    const wantOpen = e.type === 'pointercancel' ? d.base === 0 : v < -0.5 ? true : v > 0.5 ? false : d.pos < d.span / 2;
+    ledger.classList.remove('dragging'); ledger.style.transform = '';
+    if (wantOpen !== open()) fold.click();
+    swallow = e.type !== 'pointercancel';
+    setTimeout(() => { swallow = false; }, 400);   // in case no click follows (the finger ended outside a tab)
+  };
+  tabs.addEventListener('pointerup', endDrag);
+  tabs.addEventListener('pointercancel', endDrag);
+
   // tabs: tapping one while the sheet is folded opens it; tapping the tab that is already open folds it
   let wasOn = false;
-  const tabs = document.getElementById('tabs')!;
   tabs.addEventListener('click', e => {
     const t = (e.target as HTMLElement).closest<HTMLElement>('.tab');
     if (!t || !sheet()) return;

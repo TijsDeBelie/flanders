@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Terrain } from './terrain';
 import { HALF } from './terrain';
 import { keys } from '../keys';
+import { viewW, viewH } from '../viewport';
 import { settings } from '../settings';
 import { cachedRect, DragCounter, Glide, grabShift, rayOnPlane, TOUCH_DRAG_PIXELS, touchFrame, TwistGate, twoFingerMode, zoomAbout, type P2, type TouchPoint } from './camerafx';
 
@@ -34,7 +35,7 @@ export class CameraRig {
   shake(a: number) { this.shakeAmt = Math.min(1.2, this.shakeAmt + a); }
 
   constructor(private dom: HTMLElement, private terrain: Terrain, touchDrawing: (e: { clientX: number; clientY: number }) => boolean = () => false) {
-    this.cam = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, VIEW_FAR);
+    this.cam = new THREE.PerspectiveCamera(45, viewW() / viewH(), 0.5, VIEW_FAR);
     dom.addEventListener('contextmenu', e => e.preventDefault());
     /** The ray under the pointer. */
     const aim = (e: { clientX: number; clientY: number }) => {
@@ -163,7 +164,7 @@ export class CameraRig {
       const scale = (e as Event & { scale?: number }).scale ?? 1; if (!(scale > 0)) return;
       this.goal.dist = THREE.MathUtils.clamp(this.goal.dist * gestureScale / scale, 12, 260); gestureScale = scale;
     });
-    addEventListener('resize', () => { this.cam.aspect = innerWidth / innerHeight; this.cam.updateProjectionMatrix(); });
+    addEventListener('resize', () => { this.cam.aspect = viewW() / viewH(); this.cam.updateProjectionMatrix(); });
   }
 
   focus(x: number, z: number, dist?: number) { this.stopFollowing(); this.glide.stop(); this.goal.x = x; this.goal.z = z; if (dist) this.goal.dist = dist; }

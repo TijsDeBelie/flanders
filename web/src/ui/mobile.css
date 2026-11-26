@@ -10,6 +10,9 @@ body.mobile {
   --peek: calc(46px + env(safe-area-inset-bottom));
   --sheet: min(52dvh, calc(100dvh - var(--top-h, 96px) - 56px));
   --tap: 44px;
+  /* where the screen really ends: --vp-gap (viewport.ts) is how far below the page's bottom edge that is, in an iPhone home-screen app that measures itself short */
+  --sheet-top: calc(var(--sheet) - var(--vp-gap, 0px));
+  --peek-top: calc(var(--peek) - var(--vp-gap, 0px));
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
 }
@@ -48,7 +51,7 @@ body.mobile .speed .btn { display: flex; align-items: center; justify-content: c
    (An iPad in portrait is still a wide screen: it keeps the side panel, see the tablet block after the landscape one.) */
 @media (orientation: portrait) {
   body.phone #ledger {
-    top: auto; left: 0; right: 0; bottom: 0; width: auto; height: var(--sheet); z-index: 12;
+    top: auto; left: 0; right: 0; bottom: calc(0px - var(--vp-gap, 0px)); width: auto; height: var(--sheet); z-index: 12;
     border-radius: 14px 14px 0 0; border-width: 1px 0 0; padding-bottom: env(safe-area-inset-bottom);
     box-shadow: 0 -10px 34px rgba(0,0,0,.55), inset 0 0 60px rgba(150,115,60,.18);
     transition: transform .26s cubic-bezier(.2,.8,.2,1);
@@ -63,18 +66,21 @@ body.mobile .speed .btn { display: flex; align-items: center; justify-content: c
   body.phone .tab { min-height: 46px; padding: 6px 0; font-size: 13px; }
   body.phone .tabmin { width: 46px; font-size: 18px; transition: transform .2s; }
   /* a little grab handle above the tabs says the sheet moves */
-  body.phone .tabs { position: relative; }
+  body.phone .tabs { position: relative; touch-action: none; }   /* the tab bar is the handle: a vertical drag moves the sheet (mobile.ts), not the page
+  while it is dragged the sheet follows the finger and shows its content even when it started folded */
+  body.phone #ledger.dragging { transition: none; }
+  body.phone #ledger.min.dragging .pane { visibility: visible; }
   body.phone .tabs::before { content: ''; position: absolute; top: 3px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: #cdbb9566; pointer-events: none; }
   /* the things that float above the village clear the sheet, folded or open */
-  body.phone #tool-dock, body.phone #tool-dock:not(:has(.tool-panel:not([hidden]))) { left: 8px; right: 60px; bottom: calc(var(--sheet) + 8px); transform: none; width: auto; max-width: none; align-items: stretch; }
-  body.phone:has(#ledger.min) #tool-dock, body.phone:has(#ledger.min) #tool-dock:not(:has(.tool-panel:not([hidden]))) { bottom: calc(var(--peek) + 8px); }
+  body.phone #tool-dock, body.phone #tool-dock:not(:has(.tool-panel:not([hidden]))) { left: 8px; right: 60px; bottom: calc(var(--sheet-top) + 8px); transform: none; width: auto; max-width: none; align-items: stretch; }
+  body.phone:has(#ledger.min) #tool-dock, body.phone:has(#ledger.min) #tool-dock:not(:has(.tool-panel:not([hidden]))) { bottom: calc(var(--peek-top) + 8px); }
   body.phone #tool-dock #hint { max-width: none; text-align: left; font-size: 14px; }
-  body.phone #toasts { bottom: calc(var(--sheet) + 8px); }
-  body.phone:has(#ledger.min) #toasts { bottom: calc(var(--peek) + 56px); }
+  body.phone #toasts { bottom: calc(var(--sheet-top) + 8px); }
+  body.phone:has(#ledger.min) #toasts { bottom: calc(var(--peek-top) + 56px); }
   body.phone #minimap-card canvas, body.phone #minimap-card .cap { display: none; }
-  body.phone #minimap-card { display: flex; flex-direction: column; gap: 6px; left: auto; right: 8px; bottom: calc(var(--sheet) + 8px); padding: 0; background: none; border: 0; box-shadow: none; z-index: 5; }
-  body.phone:has(#ledger.min) #minimap-card { bottom: calc(var(--peek) + 8px); }
-  body.phone #tutorial { left: 8px; right: 8px; bottom: calc(var(--peek) + 8px); width: auto; z-index: 14; }
+  body.phone #minimap-card { display: flex; flex-direction: column; gap: 6px; left: auto; right: 8px; bottom: calc(var(--sheet-top) + 8px); padding: 0; background: none; border: 0; box-shadow: none; z-index: 5; }
+  body.phone:has(#ledger.min) #minimap-card { bottom: calc(var(--peek-top) + 8px); }
+  body.phone #tutorial { left: 8px; right: 8px; bottom: calc(var(--peek-top) + 8px); width: auto; z-index: 14; }
 }
 
 /* ---- landscape: the ledger stays a side panel ---- */
@@ -177,7 +183,7 @@ body.phone .swatches button { width: 30px; height: 30px; }
 body.phone .stats.five .stat b { font-size: 17px; }
 
 /* ---- the command screen (army view) ---- */
-body.phone #cmd-screen #cs-left, body.phone #cmd-screen #cs-right { width: min(190px, 44vw); max-height: 38dvh; top: auto; bottom: calc(var(--peek) + 56px); font-size: 12px; }
+body.phone #cmd-screen #cs-left, body.phone #cmd-screen #cs-right { width: min(190px, 44vw); max-height: 38dvh; top: auto; bottom: calc(var(--peek-top) + 56px); font-size: 12px; }
 body.phone #cmd-screen #cs-top { top: calc(var(--top-h, 62px) + 4px); gap: 8px; padding: 6px 10px; max-width: calc(100vw - 16px); overflow-x: auto; }
 
 /* the guide card: smaller on a phone, so it leaves room for the village */

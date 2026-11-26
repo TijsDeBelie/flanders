@@ -818,7 +818,10 @@ export class UI {
   private initTitleTips() {
     let timer = 0, cur: HTMLElement | null = null;
     const hide = () => { clearTimeout(timer); cur = null; if ($('tooltip').dataset.from === 'title') { this.tip(null); $('tooltip').dataset.from = ''; } };
-    document.addEventListener('mouseover', e => {
+    // pointerover, not mouseover: a tap on a touch screen also sends a made-up mouseover after the finger lifts (after the pointerdown that hides tips), which
+    // left a tip stuck on screen, often over a page the tap had just opened (the loading screen, the folded panel). Tips are for a hovering mouse or pen only.
+    document.addEventListener('pointerover', e => {
+      if (e.pointerType === 'touch') return;
       const t = (e.target as HTMLElement).closest?.('[title],[data-tip]') as HTMLElement | null;
       if (!t || t === cur || t.closest('#tooltip')) return;
       const title = t.getAttribute('title'); if (title) { t.dataset.tip = title; t.removeAttribute('title'); }   // take the title over so the browser does not draw its own
