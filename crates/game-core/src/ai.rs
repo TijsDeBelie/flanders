@@ -383,6 +383,12 @@ impl Ai {
         if have >= want || food_stock(w) < heads * 2 { return; }
         // a mix of what the barracks can make: archers and spearmen first, heavier troops when the stores and barracks allow
         let best = w.buildings.iter().filter(|b| b.kind == BARRACKS).map(|b| b.tier).max().unwrap_or(0);
+        // siege engines: once the barracks can build them, one engine for every eight soldiers (rams first for gates, then catapults for stone), so raids can break more than timber
+        let engines = w.army[4] + w.army[5] + w.queue[4] + w.queue[5];
+        if day >= 12 && engines < have / 8 {
+            let k = if best >= UNITS[4].tier && (w.army[5] + w.queue[5] > w.army[4] + w.queue[4]) { 4 } else if best >= UNITS[5].tier { 5 } else { 0 };
+            if k >= 4 && w.stock[PL as usize] >= 60 && w.stock[W as usize] >= 60 && w.try_train(k, 1) != 0 { return; }
+        }
         // a balanced army, tilted against what the last raiders brought (arrows glance off plate; spears answer riders): only what the world itself remembers is used, so a restored game plays on the same
         if let Some(k) = Self::wanted_kind(w, best) { if w.try_train(k, 1) == 0 { let _ = self.rng.range(10); return; } }
         let pick = self.rng.range(10);
@@ -438,15 +444,15 @@ impl Ai {
         if day < first || w.has_treaty(tag, TREATY_PEACE) || w.has_treaty(tag, TREATY_ALLIANCE) { return; }
         let revenge = w.relation(tag) < -30;
         let stay = (Self::force(w) / 4).max(3);                     // a quarter stays home
-        let ready: u32 = w.army.iter().sum();
+        let ready: u32 = w.army[..4].iter().sum();   // the engines do not count as men: they go along with whatever marches
         if ready <= stay { return; }
         let send = ready - stay;
         let need = (self.their_force * [14, 10, 7][self.aggr as usize] / 10).max(6 + self.aggr * 2) / if revenge { 2 } else { 1 };
         if send < need { return; }
-        // the raiders: three quarters of what stands in the barracks (no catapults or rams: the AI keeps those for defence of nothing; the page's raid has no siege camp)
+        // the raiders: three quarters of the men in the barracks, with every siege engine it has
         let mut units = [0u32; NK];
-        for k in 0..NK { units[k] = if k >= 4 { 0 } else { w.army[k] * send / ready.max(1) }; }
-        if units.iter().sum::<u32>() == 0 { return; }
+        for k in 0..NK { units[k] = if k >= 4 { w.army[k] } else { w.army[k] * send / ready.max(1) }; }
+        if units[..4].iter().sum::<u32>() == 0 { return; }
         let (hx, hy) = (w.buildings[0].x, w.buildings[0].y);
         let (dx, dy) = (hx - tx, hy - ty); let dl = (dx * dx + dy * dy).sqrt().max(1.0);
         let stand = tr + 12.0;

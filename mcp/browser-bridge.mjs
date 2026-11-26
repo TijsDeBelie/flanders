@@ -76,6 +76,7 @@ tool('drawbridge', 'Raise (up: true) or lower a drawbridge.', { idx: z.number().
 tool('form_army', 'Take soldiers out of the barracks into a field army: units = [spearmen, archers, swordsmen, knights, catapults].', { units: z.array(z.number().int().min(0).max(300)).length(5) });
 tool('march_army', 'March a field army to a place (relative to the town hall).', { army_id: z.number().int().min(1), dx: z.number().int(), dy: z.number().int() });
 tool('recall_army', 'Send a field army home.', { army_id: z.number().int().min(1) });
+tool('defend_army', 'Send a field army to join the defence while raiders are attacking (see observe.attack). It marches out to meet them.', { army_id: z.number().int().min(1) });
 tool('prices', 'What each resource is worth in coins right now (scarce goods cost more).', {});
 tool('choice', 'Is a decision waiting for you (plague, preacher, noble, hard winter)?', {});
 tool('decide', 'Answer the waiting decision with option 0, 1 or 2 (see the game for what each means).', { option: z.number().int().min(0).max(2) });

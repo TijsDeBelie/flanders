@@ -33,11 +33,11 @@ export interface AgentHost {
 }
 
 /** Tools the agent may call. Anything else is refused. */
-export const AGENT_TOOLS = ['observe', 'catalog', 'buildings', 'probe', 'can_place', 'place', 'upgrade', 'option', 'demolish', 'repair', 'train', 'garrison', 'drawbridge', 'form_army', 'march_army', 'recall_army', 'rivals', 'attack', 'prices', 'choice', 'decide', 'bribe', 'relations', 'envoy', 'gift', 'alliance', 'marriage', 'declare_war'] as const;
+export const AGENT_TOOLS = ['observe', 'catalog', 'buildings', 'probe', 'can_place', 'place', 'upgrade', 'option', 'demolish', 'repair', 'train', 'garrison', 'drawbridge', 'form_army', 'march_army', 'recall_army', 'defend_army', 'rivals', 'attack', 'prices', 'choice', 'decide', 'bribe', 'relations', 'envoy', 'gift', 'alliance', 'marriage', 'declare_war'] as const;
 /** The most goods one gift may carry (the game itself allows 500). */
 export const MAX_GIFT = 100;
 
-const MUTATING = new Set(['place', 'upgrade', 'option', 'demolish', 'repair', 'train', 'garrison', 'drawbridge', 'form_army', 'march_army', 'recall_army', 'attack', 'decide', 'bribe', 'envoy', 'gift', 'alliance', 'marriage', 'declare_war']);
+const MUTATING = new Set(['place', 'upgrade', 'option', 'demolish', 'repair', 'train', 'garrison', 'drawbridge', 'form_army', 'march_army', 'recall_army', 'defend_army', 'attack', 'decide', 'bribe', 'envoy', 'gift', 'alliance', 'marriage', 'declare_war']);
 const NEVER_BUILD = new Set([15]);   // the town hall cannot be built (the game refuses it too)
 
 /** A token-bucket-ish limiter: a minimum gap between calls plus a budget per minute. */
@@ -171,6 +171,7 @@ export function startAgentBridge(host: AgentHost, port: number, token: string) {
       const code = world.det_march(id, ox + dx, oy + dy, false, 0, 0); if (code === 0) host.commit({ op: 'march', idx: id, x: ox + dx, y: oy + dy }); return { ok: code === 0, code };
     },
     recall_army(a) { const id = int(a.army_id, 1, 100000, 'army_id'), code = w().det_recall(id); if (code === 0) host.commit({ op: 'recall', idx: id }); return { ok: code === 0, code }; },
+    defend_army(a) { const id = int(a.army_id, 1, 100000, 'army_id'), code = w().det_defend(id); if (code === 0) { host.commit({ op: 'defend', idx: id }); host.afterChange(); } return { ok: code === 0, code, reason: code === 0 ? 'the army marches out to join the fight' : code === -10 ? 'there is no fight to join' : `code ${code}` }; },
     prices() { return Object.fromEntries(RES.map((r, i) => [r.key, w().prices()[i] / 100])); },
     choice() { const c = Array.from(w().choice_flat()); return c.length ? { waiting: true, kind: c[0], options: c[1], days_left: c[2] } : { waiting: false }; },
     decide(a) { const opt = int(a.option, 0, 2, 'option'), code = w().choose(opt); if (code === 0) { host.commit({ op: 'choose', kind: opt }); host.afterChange(); } return { ok: code === 0, code }; },

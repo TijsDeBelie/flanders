@@ -81,6 +81,8 @@ export class ArmyView {
 
   private siegeWorks: SiegeWorks;
   constructor(private terrain: Terrain) { this.group.add(this.remains.group); this.siegeWorks = new SiegeWorks((x, z) => this.terrain.walkAt(x, z)); this.group.add(this.siegeWorks.group); }
+  /** A siege tower's bridge came down on a wall at (x, z). */
+  set onDock(f: ((x: number, z: number) => void) | undefined) { this.siegeWorks.onDock = f; }
 
   /** Standing army and guards, from the village state. */
   syncPeace(buildings: Float32Array, army: number[], guards: number, garrison: number[]) {
