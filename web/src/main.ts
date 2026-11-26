@@ -279,6 +279,7 @@ function checkpoint(force = false) {
   const now = performance.now();
   if (!force && now - lastCheckpointAt < 45_000) return;
   lastCheckpointAt = now;
+  savePveVillages();
   try { const bytes = lv.world.snapshot(); saveCheckpoint(checkpointKey(), { meta: { rules: myRules, v: SYNC_PROTOCOL, site: mySite, epoch: myEpoch, cmds: myLog.length, lastCmd: myLog[myLog.length - 1].cmd, tick: Number(lv.world.tick()), savedAt: Date.now(), hash: String(lv.world.state_hash()), sum: checksum(bytes) }, bytes }); } catch (e) { console.warn('Could not write a checkpoint.', e); }
 }
 // maps made by older generators are gone: their saved villages would not fit the new terrain, so they are removed
@@ -2196,19 +2197,45 @@ const foeColorOf = (tag: number): number | null => { if (tag === 0) return null;
 function rivalName(tag: number): string { for (const r of rivals.values()) if (tagOf(r.key) === tag) return r.name; return 'Another village'; }
 
 // ---------- PVE: the computer's villages (docs/PVE.md) ----------
+/** What a computer village is kept as between visits (its world and its controller), so a reload brings it back as it was instead of growing it again from the world name. */
+interface PveKept { rules: string; v: number; epoch: number; tick: number; world: Uint8Array; ai: Uint8Array; sum: number; hash: string }
+const pveKey = (key: string) => `pve:${checkpointKey()}:${key}`;
+function savePveVillages() {
+  for (const r of rivals.values()) {
+    if (!r.ai) continue;
+    try {
+      const world = r.village.world.snapshot(), kept: PveKept = { rules: myRules, v: SYNC_PROTOCOL, epoch: myEpoch ?? 0, tick: Number(r.village.world.tick()), world, ai: r.ai.snapshot(), sum: checksum(world), hash: String(r.village.world.state_hash()) };
+      void saveKept(pveKey(r.key), kept);
+    } catch (e) { console.warn('Could not keep a computer village.', e); }
+  }
+}
+/** The kept world and controller of a computer village, or null when none was kept, it is of other rules or a restarted history, it is ahead of the player's own village, or it does not check out. */
+async function loadPveVillage(key: string, goal: number): Promise<{ world: World; ai: Ai } | null> {
+  try {
+    const k = await loadKept(pveKey(key)) as PveKept | null;
+    if (!k || k.rules !== myRules || k.v !== SYNC_PROTOCOL || k.epoch !== (myEpoch ?? 0) || !(k.tick <= goal) || checksum(k.world) !== k.sum) return null;
+    const world = world_restore(k.world); if (!world) return null;
+    const ai = Ai.restore(k.ai);
+    if (!ai || String(world.state_hash()) !== k.hash) { world.free(); ai?.free(); return null; }
+    return { world, ai };
+  } catch { return null; }
+}
+
 /** Make the two computer villages of a PVE game: each on a site near yours, each with a layout picked at random from the demo layouts, each run by an `Ai` that plays by the player's rules. */
 async function setupPve() {
   const layouts = pickLayouts(worldName, myName, Ai.layout_count()), picks = pickSites(sites, mySite);
-  picks.forEach((site, n) => {
+  const goal0 = Number(lv.world.tick());
+  for (const [n, site] of picks.entries()) {
     const o = siteOrigin(site), key = aiKey(n), name = aiName(worldName, n);
-    const village = new Village(new World(seedBig, o.x, o.z), 'rival:' + key, name, false, shared, n ? 0xb08030 : 0xb03030); village.foeColor = foeColorOf;
+    const kept = goal0 > 0 ? await loadPveVillage(key, goal0) : null;
+    const village = new Village(kept?.world ?? new World(seedBig, o.x, o.z), 'rival:' + key, name, false, shared, n ? 0xb08030 : 0xb03030); village.foeColor = foeColorOf;
     village.onReport = rep => onRivalReport(key, rep);
-    const ai = new Ai(seedBig, n, layouts[n] ?? n, tagOf(key));
+    const ai = kept?.ai ?? new Ai(seedBig, n, layouts[n] ?? n, tagOf(key));
     villagesChanged(); rivals.set(key, { key, peerId: '', name, site, village, online: false, sync: 'computer', tick: 0, log: [], track: new ReplicaTrack(), policy: new ResyncPolicy(), versionOk: true, state: 'ok', confirming: false, forked: false, liar: false, desyncs: 0, resyncs: 0, lastDiag: '', bigJumpAt: 0, failedAt: 0, ai });
     village.setWorld(village.world); refreshTerrain(village.world); village.syncFull(); village.markCaughtUp();
     chainTo(rivals.get(key)!);                 // the road between the two cities, for our armies...
     village.world.link_village(lv.ox, lv.oz);  // ... and for theirs
-  });
+  }
   // a saved game comes back at its own tick: the computer's villages grow up to it (they are not part of the player's history)
   const goal = Number(lv.world.tick());
   if (goal > 0) {

@@ -67,7 +67,7 @@ export class Village {
     this.planted = new PlantedTrees(sh.terrain); sh.scene.add(this.planted.group);
     this.nets = new NetView(sh.terrain); sh.scene.add(this.nets.group);
     this.field = new FieldView(sh.terrain); this.field.friend = color; this.field.site = campSite(() => this.world, sh.terrain, () => sh.forest); this.bridges = new BridgesView(sh.terrain); this.people = new People(sh.terrain);
-    this.army = new ArmyView(sh.terrain); this.ruins = new Ruins(sh.terrain);
+    this.army = new ArmyView(sh.terrain); this.army.onDock = (x, z) => this.sh.fx.dock(x, z); this.ruins = new Ruins(sh.terrain);
     if (sh.crowdShadows === false) this.people.group.traverse((o: THREE.Object3D) => { o.castShadow = false; });
     const channel = (x: number, z: number) => this.moats.levelAt(x, z);
     this.army.channelLevelAt = this.field.channelLevelAt = channel;
@@ -228,7 +228,7 @@ export class Village {
     const s = w.take_shots();
     if (!jumped) for (let i = 0; i < s.length; i += 7) {
       if (s[i] === 2) { this.sh.fx.slam(s[i + 1], s[i + 2], 3.5); Village.onBossFx?.(2, s[i + 1], s[i + 2]); }   // a boss's slam
-      else if (s[i] === 4) this.sh.fx.slam(s[i + 1], s[i + 2], 5);   // a wall section falls to a sap, or a siege tower is wrecked
+      else if (s[i] === 4) this.sh.fx.collapse(s[i + 1], s[i + 2], 5);   // a wall section falls to a sap, or a siege tower is wrecked
       else if (s[i] === 3) { this.sh.fx.hornBlast(s[i + 1], s[i + 2], 32); Village.onBossFx?.(3, s[i + 1], s[i + 2]); }   // a warlord's horn
       else this.sh.fx.shot(s[i], s[i + 1], s[i + 2], s[i + 3], s[i + 4], s[i + 5] > 0.5, s[i] === 0 ? this.army.shooterHeight(s[i + 1], s[i + 2]) : 1.5);
     }

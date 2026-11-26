@@ -58,6 +58,9 @@ export class SiegeWorks {
   private towers: ReturnType<typeof makeTower>[] = [];
   private saps: ReturnType<typeof makeSap>[] = [];
   private height: (x: number, z: number) => number;
+  /** Called once when a siege tower's bridge comes down on the wall (x, z of the tower). */
+  onDock?: (x: number, z: number) => void;
+  private docked = new Set<number>();
   constructor(height: (x: number, z: number) => number) { this.height = height; }
 
   sync(flat: ArrayLike<number>, t = 0) {
@@ -69,6 +72,8 @@ export class SiegeWorks {
       const it = towers[i]; m.g.visible = !!it;
       if (!it) return;
       m.g.position.set(it.x, this.height(it.x, it.z), it.z); m.g.rotation.y = Math.PI / 2 - it.face;
+      const was = this.docked.has(i), now = it.state === TOWER_DOCKED;
+      if (now && !was) { this.docked.add(i); if (t > 0) this.onDock?.(it.x, it.z); } else if (!now && was) this.docked.delete(i);
       const wreck = it.state === TOWER_WRECK;
       m.hull.rotation.z = wreck ? 0.35 : 0; m.hull.position.y = wreck ? -0.8 : 0; m.hull.scale.y = wreck ? 0.55 : 0.6 + 0.4 * Math.max(0.35, it.share);   // a battered tower sags
       m.bridge.position.y = it.state === TOWER_DOCKED ? 7.0 : 7.0; m.bridge.rotation.x = it.state === TOWER_DOCKED ? 0 : -1.25;   // the bridge drops when it docks

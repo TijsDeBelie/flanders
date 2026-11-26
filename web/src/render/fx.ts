@@ -139,6 +139,20 @@ export class Effects2 {
     for (let i = 0; i < 8; i++) { const a = Math.random() * 6.283, s = 2 + Math.random() * 3; this.dust.emit(x, y, z, Math.cos(a) * s, 3 + Math.random() * 3, Math.sin(a) * s, 0.6, 0.3, 0.15, 0.4, 0.37, 0.33, 1); }
   }
 
+  /** A wall section or siege tower comes down: a column of dust rises, chunks of stone and timber are thrown out, and a pall of smoke hangs over the rubble. */
+  collapse(x: number, z: number, reach = 5) {
+    const y = this.terrain.heightAt(x, z) + 0.4;
+    for (let i = 0; i < 36; i++) { const a = Math.random() * 6.283, s = reach * (0.3 + Math.random() * 0.9); this.dust.emit(x + Math.cos(a) * 0.8, y, z + Math.sin(a) * 0.8, Math.cos(a) * s * 0.5, 3 + Math.random() * 4.5, Math.sin(a) * s * 0.5, 1.6 + Math.random() * 1.4, 0.9, 3.4, 0.5, 0.45, 0.38, 0.75); }
+    for (let i = 0; i < 14; i++) { const a = Math.random() * 6.283, s = 2.5 + Math.random() * 4; this.dust.emit(x, y + 0.6, z, Math.cos(a) * s, 4 + Math.random() * 4, Math.sin(a) * s, 0.9 + Math.random() * 0.5, 0.35, 0.2, 0.42, 0.38, 0.33, 1); }
+    for (let i = 0; i < 12; i++) this.smoke.emit(x + (Math.random() - 0.5) * 3, y + 0.5, z + (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 0.8, 1.2 + Math.random() * 1.4, (Math.random() - 0.5) * 0.8, 3.2 + Math.random() * 1.6, 1.4, 4.2, 0.36, 0.34, 0.32, 0.5);
+  }
+
+  /** A siege tower's bridge slams down onto the wall: a short puff of dust along the wall top. */
+  dock(x: number, z: number) {
+    const y = this.terrain.heightAt(x, z) + 6.5;
+    for (let i = 0; i < 16; i++) { const a = Math.random() * 6.283, s = 1 + Math.random() * 2.2; this.dust.emit(x + (Math.random() - 0.5) * 1.6, y, z + (Math.random() - 0.5) * 1.6, Math.cos(a) * s, 0.4 + Math.random() * 1.2, Math.sin(a) * s, 0.7 + Math.random() * 0.5, 0.5, 1.6, 0.55, 0.5, 0.42, 0.65); }
+  }
+
   /** A war horn: a ring of gold light spreading out over the field as far as it spurs the escort on. */
   hornBlast(x: number, z: number, reach = 32) {
     const y = this.terrain.heightAt(x, z) + 1.6, life = 1.1;
