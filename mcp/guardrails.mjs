@@ -4,7 +4,7 @@
 export const TOOLS = {
   observe: { mutating: false }, catalog: { mutating: false }, buildings: { mutating: false }, probe: { mutating: false }, can_place: { mutating: false }, rivals: { mutating: false }, prices: { mutating: false }, choice: { mutating: false }, decide: { mutating: true }, bribe: { mutating: true },
   place: { mutating: true }, upgrade: { mutating: true }, option: { mutating: true }, demolish: { mutating: true, destructive: true }, repair: { mutating: true }, train: { mutating: true },
-  garrison: { mutating: true }, drawbridge: { mutating: true }, form_army: { mutating: true }, march_army: { mutating: true }, recall_army: { mutating: true },
+  garrison: { mutating: true }, drawbridge: { mutating: true }, form_army: { mutating: true }, march_army: { mutating: true }, recall_army: { mutating: true }, defend_army: { mutating: true },
   attack: { mutating: true, aggressive: true },
   // diplomacy (browser game only: the headless server has no neighbours). Reading is free; an envoy and a gift cost goods; a marriage costs 150 gold and binds for good, so it needs
   // `confirm`; a declaration of war is as aggressive as an attack: off unless the human allows it, and `confirm_attack` on top.

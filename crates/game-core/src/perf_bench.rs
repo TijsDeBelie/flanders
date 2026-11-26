@@ -80,3 +80,21 @@ fn perf_bench_busy_village() {
     println!("TOTAL step calm {step:.3} ms, battle {stepb:.3} ms");
     assert!(step < 50.0 && stepb < 100.0, "a tick must stay far below the 250 ms tick budget");
 }
+
+#[test]
+fn terrain_region_matches_height_at_to_the_bit() {
+    let mut w = busy_village();
+    w.stock = [30000; N_RES];
+    for i in 0..40 { let a = i as f32 / 40.0 * std::f32::consts::TAU; w.place(MOAT, (a.cos() * 62.0).round() as i32, (a.sin() * 62.0).round() as i32, 0); }
+    w.place(DRAWBRIDGE, 0, 62, 0);
+    for i in 0..6 { w.place(RAISE, 20 + i * 3, -30, 0); w.place(LOWER, -30, 20 + i * 3, 0); }
+    let mut checked = 0;
+    for &(x0, y0, nx, ny, step) in &[(-90.0f32, -90.0f32, 45u32, 45u32, 4.0f32), (-20.0, 40.0, 30, 30, 1.0), (30.0, -45.0, 25, 40, 2.0), (-300.0, -300.0, 20, 20, 8.0), (50.0, 50.0, 1, 1, 4.0)] {
+        let r = w.terrain_region(x0, y0, nx, ny, step);
+        for j in 0..ny { for i in 0..nx {
+            let (x, y) = (x0 + i as f32 * step, y0 + j as f32 * step);
+            assert_eq!(r[(j * nx + i) as usize].to_bits(), w.height_at(x, y).to_bits(), "height differs at {x},{y}"); checked += 1;
+        }}
+    }
+    println!("checked {checked} heights");
+}

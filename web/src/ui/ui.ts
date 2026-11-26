@@ -20,6 +20,7 @@ const bi = (name: string, size = 16) => icon(name, size, { mono: true });
 import { ACTIONS, keys, prettyKey, type Action } from '../keys';
 import { mountFlagDesigner, paintFlag } from './flagdesigner';
 import { mountSettings } from './settingsui';
+import { settings, onSettings } from '../settings';
 import { mountRestart, type RestartHooks } from './restartui';
 import { downloadBackup } from '../backup';
 import { loadFlag, saveFlag } from '../flag';
@@ -90,6 +91,9 @@ export interface Handlers {
   copyLink(): void;
   cheat(action: number, a: number, b: number): void;
   toggleMute(): void;
+  setVolume(v: number): void;
+  muteHidden(on: boolean): void;
+  audioPrefs(): { volume: number; muteHidden: boolean };
   muster(units: number[]): void;
   detAction(action: string, id: number): void;
   /** Set how many workers a building should have (-1 auto, 0 paused). */
@@ -392,19 +396,23 @@ export class UI {
   <div class="sheet wide settingsheet">
     <h2>Settings</h2>
     <div class="settabs" id="settabs" role="tablist" aria-label="Settings sections">
-      <button type="button" role="tab" data-sec="display">Display</button><button type="button" role="tab" data-sec="sound">Sound</button><button type="button" role="tab" data-sec="game">While away</button><button type="button" role="tab" data-sec="controls">Controls</button><button type="button" role="tab" data-sec="data">Data &amp; network</button><button type="button" role="tab" data-sec="about">About</button><button type="button" role="tab" data-sec="tests" id="settab-tests" hidden>Test tools</button>
+      <button type="button" role="tab" data-sec="display">Display</button><button type="button" role="tab" data-sec="sound">Sound</button><button type="button" role="tab" data-sec="game">Gameplay</button><button type="button" role="tab" data-sec="controls">Controls</button><button type="button" role="tab" data-sec="data">Data &amp; network</button><button type="button" role="tab" data-sec="about">About</button><button type="button" role="tab" data-sec="tests" id="settab-tests" hidden>Test tools</button>
     </div>
     <div class="setbody" id="setbody">
+      <section data-sec="display" hidden>
+        <h3>Window</h3>
+        <label class="setrow" for="btn-full"><span><b>Full screen</b><small>Fills the whole screen (F11).</small></span><button class="pbtn" id="btn-full" title="Full-screen mode (F11)">${bi('fullscreen')} Full screen</button></label>
+      </section>
       <div id="display-body"></div>
       <section data-sec="sound" hidden>
-        <h3>Sound</h3>
-        <button class="btn" id="btn-sound" title="Sound on / off"><svg viewBox="0 0 16 16" id="snd-on"><path d="M2 6h3l4-3v10l-4-3H2z"/><path d="M11 5.2a4 4 0 0 1 0 5.6M12.8 3.6a6.3 6.3 0 0 1 0 8.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><svg viewBox="0 0 16 16" id="snd-off" hidden><path d="M2 6h3l4-3v10l-4-3H2z"/><path d="M11 6l4 4M15 6l-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg> <span class="ml">Sound on / off</span></button>
-        <h3>Screen</h3>
-        <button class="btn" id="btn-full" title="Full-screen mode (F11)">${bi('fullscreen')} Full screen</button>
+        <h3>Volume</h3>
+        <label class="setrow" for="set-volume"><span><b>Master volume</b><small>Building, wind, fire and battle sounds.</small></span><input type="range" id="set-volume" min="0" max="1" step="0.05"><output id="set-volume-v"></output></label>
+        <label class="setrow" for="btn-sound"><span><b>Sound</b><small>Switch all sound off or on.</small></span><button class="btn" id="btn-sound" title="Sound on / off"><svg viewBox="0 0 16 16" id="snd-on"><path d="M2 6h3l4-3v10l-4-3H2z"/><path d="M11 5.2a4 4 0 0 1 0 5.6M12.8 3.6a6.3 6.3 0 0 1 0 8.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><svg viewBox="0 0 16 16" id="snd-off" hidden><path d="M2 6h3l4-3v10l-4-3H2z"/><path d="M11 6l4 4M15 6l-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg> <span class="ml">On / off</span></button></label>
+        <label class="setrow" for="set-muteHidden"><span><b>Mute in the background</b><small>Silence the game while this tab is hidden.</small></span><input type="checkbox" id="set-muteHidden"></label>
       </section>
       <section data-sec="game" hidden>
         <h3>When you step away</h3>
-        <p class="muted">This applies in a hidden tab or after two minutes without input. Closing the game saves and stops the village.</p>
+        <p class="muted">In a hidden tab or after two minutes without input.</p>
         <div class="btnrow wrap" role="group" aria-label="Away policy">
           <button class="pbtn" data-steward="pause" aria-pressed="true">Pause village</button>
           <button class="pbtn" data-steward="steward" aria-pressed="false">Let steward work</button>
@@ -510,12 +518,17 @@ export class UI {
     $('btn-res').onclick = () => this.h.toggleResources();
     $('btn-cov').onclick = () => this.h.toggleCoverage();
     $('btn-sound').onclick = () => this.h.toggleMute();
+    { const vol = $('set-volume') as HTMLInputElement, hid = $('set-muteHidden') as HTMLInputElement, a = this.h.audioPrefs();
+      vol.value = String(a.volume); hid.checked = a.muteHidden; $('set-volume-v').textContent = `${Math.round(a.volume * 100)}%`;
+      vol.oninput = () => { $('set-volume-v').textContent = `${Math.round(Number(vol.value) * 100)}%`; this.h.setVolume(Number(vol.value)); };
+      hid.onchange = () => this.h.muteHidden(hid.checked); }
     this.initTitleTips();
     $('sub').onclick = () => this.openWinter();
     $('btn-settings').onclick = () => this.openSettings(this.lastSettingsSection);
     const restart = mountRestart($('restart'), { info: () => this.h.restartInfo(), run: () => this.h.restartRun(), restore: () => this.h.restartRestore(), backup: () => downloadBackup(), toast: (t, k) => this.toast(t, k) });
     this.restartSection = () => { void restart.drawSection($('restart-section')); };
     this.initSettingsTabs();
+    { const apply = () => { const k = settings().uiScale; document.body.classList.toggle('uiscaled', k !== 1); document.body.style.setProperty('--ui-scale', String(k)); }; apply(); onSettings((_, c) => { if (c.includes('uiScale')) apply(); }); }
     mountSettings($('display-body'), () => this.toast('Anti-aliasing is chosen when the page loads: reload to apply it.', 'info'), () => { this.modal('settings', false); this.h.watch(''); }, text => this.confirm(text, 'Replace', 'Restore this backup?'));
     $('btn-mp').onclick = () => this.modal('mp', true);
     const setBattleMin = (min: boolean) => { this.battleMin = min; $('battle').hidden = min || $('btn-bell').hidden; this.syncBattleBar(); $('btn-bell').classList.toggle('alert', min); $('btn-bell').setAttribute('aria-pressed', String(!min)); };
@@ -715,7 +728,7 @@ export class UI {
   setRules(fp: string) { const t = `${versionLabel()} · rules ${fp}`; $('mp-build').textContent = t; $('home-version').title = `Rules fingerprint ${fp}: players with the same one play by the same rules.`; }
   private lastSettingsSection = 'display';
   private restartSection = () => {};
-  /** The one settings page: Display, Sound, Controls, Data and network, About (and the test tools when they are on). */
+  /** The one settings page: Display, Sound, Gameplay, Controls, Data and network, About (and the test tools when they are on). */
   openSettings(section = 'display') {
     this.showSettingsSection(section); this.modal('settings', true);
     if (!$('topbar').hidden) this.restartSection();   // the restart section needs a village: not on the start page
@@ -817,10 +830,27 @@ export class UI {
       timer = window.setTimeout(() => {
         const text = t.dataset.tip;
         if (!text || !t.matches(':hover')) return;
-        const r = t.getBoundingClientRect(); this.tip(`<small style="color:#f3ead2">${esc(text)}</small>`, Math.max(8, Math.min(innerWidth - 280, r.left)) - 16, r.bottom > innerHeight - 80 ? r.top - 56 : r.bottom - 6); $('tooltip').dataset.from = 'title';
+        const r = t.getBoundingClientRect(); this.tip(`<small style="color:#f3ead2">${esc(forTouch(text))}</small>`, Math.max(8, Math.min(innerWidth - 280, r.left)) - 16, r.bottom > innerHeight - 80 ? r.top - 56 : r.bottom - 6); $('tooltip').dataset.from = 'title';
       }, 380);
     });
     document.addEventListener('mouseout', e => { if (cur && !cur.contains(e.relatedTarget as Node)) hide(); });
+    // a finger has no hover: holding one on a button or label shows its tooltip (in touch words) for a few seconds, and the tap that ends the hold does nothing
+    let hold = 0, shown = 0, swallow = false;
+    document.addEventListener('pointerdown', e => {
+      swallow = false;
+      if (e.pointerType !== 'touch' || !document.body.classList.contains('mobile')) return;
+      const t = (e.target as HTMLElement).closest?.('[title],[data-tip]') as HTMLElement | null; if (!t || t.closest('#tooltip')) return;
+      const title = t.getAttribute('title'); if (title) { t.dataset.tip = title; t.removeAttribute('title'); }
+      if (!t.dataset.tip) return;
+      clearTimeout(hold); hold = window.setTimeout(() => {
+        const r = t.getBoundingClientRect(), x = Math.max(8, Math.min(innerWidth - 280, r.left)), below = r.top < 120;
+        this.tip(`<small style="color:#f3ead2">${esc(forTouch(t.dataset.tip!))}</small>`, x, below ? r.bottom + 6 : r.top - 56); $('tooltip').dataset.from = 'title';
+        swallow = true; clearTimeout(shown); shown = window.setTimeout(() => { swallow = false; if ($('tooltip').dataset.from === 'title') { this.tip(null); $('tooltip').dataset.from = ''; } }, 3500);
+      }, 450);
+    });
+    const release = () => clearTimeout(hold);
+    document.addEventListener('pointerup', release, true); document.addEventListener('pointercancel', release, true); document.addEventListener('scroll', release, true);
+    document.addEventListener('click', e => { if (swallow) { swallow = false; e.stopPropagation(); e.preventDefault(); } }, true);
     document.addEventListener('pointerdown', hide, true); document.addEventListener('wheel', hide, { passive: true });
   }
 
@@ -828,8 +858,8 @@ export class UI {
     document.getElementById('data-replay')?.removeAttribute('hidden');   // watching your history needs a village: the start screen's Display settings do not offer it
     $('intro').hidden = true; $('topbar').hidden = false; $('ledger').hidden = false; $('minimap-card').hidden = false; this.applyPanels(); this.finishLoading();
     // keep the ledger below the top bar however many rows the bar wraps to
-    const bar = $('topbar'), set = () => document.documentElement.style.setProperty('--top-h', bar.offsetHeight + 'px');
-    set(); new ResizeObserver(set).observe(bar);
+    const bar = $('topbar'), set = () => document.documentElement.style.setProperty('--top-h', bar.getBoundingClientRect().height / settings().uiScale + 'px');
+    set(); new ResizeObserver(set).observe(bar); onSettings((_, changed) => { if (changed.includes('uiScale')) set(); });
   }
   private hoverPill = -1;
   private owner = '';

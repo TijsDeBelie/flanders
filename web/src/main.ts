@@ -137,6 +137,9 @@ const ui: UI = new UI({
   muster: u => doMuster(u, true),
   detAction: (a, id) => detAction(a, id),
   toggleMute: () => { sound.setMuted(!sound.muted); ui.setMuteIcon(sound.muted); },
+  setVolume: v => sound.setVolume(v),
+  muteHidden: on => sound.setMuteHidden(on),
+  audioPrefs: () => ({ volume: sound.volume, muteHidden: sound.muteHidden }),
   minimapClick: (x, z) => rig?.focus(x, z),
   train: (k, n) => doTrain(k, n),
   untrain: (k, n) => doUntrain(k, n),
@@ -277,6 +280,7 @@ function checkpoint(force = false) {
   const now = performance.now();
   if (!force && now - lastCheckpointAt < 45_000) return;
   lastCheckpointAt = now;
+  savePveVillages();
   try { const bytes = lv.world.snapshot(); saveCheckpoint(checkpointKey(), { meta: { rules: myRules, v: SYNC_PROTOCOL, site: mySite, epoch: myEpoch, cmds: myLog.length, lastCmd: myLog[myLog.length - 1].cmd, tick: Number(lv.world.tick()), savedAt: Date.now(), hash: String(lv.world.state_hash()), sum: checksum(bytes) }, bytes }); } catch (e) { console.warn('Could not write a checkpoint.', e); }
 }
 // maps made by older generators are gone: their saved villages would not fit the new terrain, so they are removed
@@ -2194,19 +2198,45 @@ const foeColorOf = (tag: number): number | null => { if (tag === 0) return null;
 function rivalName(tag: number): string { for (const r of rivals.values()) if (tagOf(r.key) === tag) return r.name; return 'Another village'; }
 
 // ---------- PVE: the computer's villages (docs/PVE.md) ----------
+/** What a computer village is kept as between visits (its world and its controller), so a reload brings it back as it was instead of growing it again from the world name. */
+interface PveKept { rules: string; v: number; epoch: number; tick: number; world: Uint8Array; ai: Uint8Array; sum: number; hash: string }
+const pveKey = (key: string) => `pve:${checkpointKey()}:${key}`;
+function savePveVillages() {
+  for (const r of rivals.values()) {
+    if (!r.ai) continue;
+    try {
+      const world = r.village.world.snapshot(), kept: PveKept = { rules: myRules, v: SYNC_PROTOCOL, epoch: myEpoch ?? 0, tick: Number(r.village.world.tick()), world, ai: r.ai.snapshot(), sum: checksum(world), hash: String(r.village.world.state_hash()) };
+      void saveKept(pveKey(r.key), kept);
+    } catch (e) { console.warn('Could not keep a computer village.', e); }
+  }
+}
+/** The kept world and controller of a computer village, or null when none was kept, it is of other rules or a restarted history, it is ahead of the player's own village, or it does not check out. */
+async function loadPveVillage(key: string, goal: number): Promise<{ world: World; ai: Ai } | null> {
+  try {
+    const k = await loadKept(pveKey(key)) as PveKept | null;
+    if (!k || k.rules !== myRules || k.v !== SYNC_PROTOCOL || k.epoch !== (myEpoch ?? 0) || !(k.tick <= goal) || checksum(k.world) !== k.sum) return null;
+    const world = world_restore(k.world); if (!world) return null;
+    const ai = Ai.restore(k.ai);
+    if (!ai || String(world.state_hash()) !== k.hash) { world.free(); ai?.free(); return null; }
+    return { world, ai };
+  } catch { return null; }
+}
+
 /** Make the two computer villages of a PVE game: each on a site near yours, each with a layout picked at random from the demo layouts, each run by an `Ai` that plays by the player's rules. */
 async function setupPve() {
   const layouts = pickLayouts(worldName, myName, Ai.layout_count()), picks = pickSites(sites, mySite);
-  picks.forEach((site, n) => {
+  const goal0 = Number(lv.world.tick());
+  for (const [n, site] of picks.entries()) {
     const o = siteOrigin(site), key = aiKey(n), name = aiName(worldName, n);
-    const village = new Village(new World(seedBig, o.x, o.z), 'rival:' + key, name, false, shared, n ? 0xb08030 : 0xb03030); village.foeColor = foeColorOf;
+    const kept = goal0 > 0 ? await loadPveVillage(key, goal0) : null;
+    const village = new Village(kept?.world ?? new World(seedBig, o.x, o.z), 'rival:' + key, name, false, shared, n ? 0xb08030 : 0xb03030); village.foeColor = foeColorOf;
     village.onReport = rep => onRivalReport(key, rep);
-    const ai = new Ai(seedBig, n, layouts[n] ?? n, tagOf(key));
+    const ai = kept?.ai ?? new Ai(seedBig, n, layouts[n] ?? n, tagOf(key));
     villagesChanged(); rivals.set(key, { key, peerId: '', name, site, village, online: false, sync: 'computer', tick: 0, log: [], track: new ReplicaTrack(), policy: new ResyncPolicy(), versionOk: true, state: 'ok', confirming: false, forked: false, liar: false, desyncs: 0, resyncs: 0, lastDiag: '', bigJumpAt: 0, failedAt: 0, ai });
     village.setWorld(village.world); refreshTerrain(village.world); village.syncFull(); village.markCaughtUp();
     chainTo(rivals.get(key)!);                 // the road between the two cities, for our armies...
     village.world.link_village(lv.ox, lv.oz);  // ... and for theirs
-  });
+  }
   // a saved game comes back at its own tick: the computer's villages grow up to it (they are not part of the player's history)
   const goal = Number(lv.world.tick());
   if (goal > 0) {
@@ -2433,6 +2463,18 @@ function selectKind(k: number | null) {
 }
 
 /** Better buildings employ more people and make more: x1, x2.25, x3.5, x4.75. */
+/** Amounts per day at full staffing (a cycle is `cycle` ticks, a day 240), with the building's speed upgrades (`speed` in percent). */
+function perDay(d: { cycle: number }, a: [number, number][], tier: number, speed = 100): [number, number][] { return scaled(a, tier).map(([r, n]) => [r, Math.round(n * 240 / d.cycle * speed / 100)]); }
+/** What a producer makes and uses per day at its present tier, and the same at the next one. */
+function perDayHtml(d: { cycle: number; maxTier: number; jobs: number }, tier: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }, pace: number[] = [100, 100, 100]): string {
+  const speed = Math.round(pace[0] * pace[1] * pace[2] / 10000), why = [pace[0] > 100 ? `upgrades +${pace[0] - 100}%` : '', pace[1] < 100 ? 'no road to the castle: half pace' : '', pace[2] < 100 ? `crew ${pace[2]}% staffed` : ''].filter(Boolean);
+  const paceNote = speed !== 100 ? `<p class="muted">Work pace ${speed}% (${why.join(', ')}). Included below.</p>` : '';
+  const cell = (a: [number, number][], sign: string) => a.map(([r, n]) => `${resIcon(r)} ${sign}${n}`).join(' ');
+  const stat = (label: string, now: [number, number][], next: [number, number][] | null, sign: string) =>
+    `<div class="stat"><b>${cell(now, sign)}</b><span>${label}</span>${next ? `<small class="muted">Next tier: ${cell(next, sign)}</small>` : ''}</div>`;
+  const up = tier < d.maxTier;
+  return `${paceNote}<div class="stats">${stat('Makes per day', perDay(d, recipe.outputs, tier, speed), up ? perDay(d, recipe.outputs, tier + 1, speed) : null, '+')}${recipe.inputs.length ? stat('Uses per day', perDay(d, recipe.inputs, tier, speed), up ? perDay(d, recipe.inputs, tier + 1, speed) : null, '−') : ''}</div>`;
+}
 function scaled(a: [number, number][], tier: number): [number, number][] { return a.map(([r, n]) => [r, Math.max(n, Math.floor((n * (4 + 5 * tier) + 2) / 4))]); }
 
 function placeHint(k: number) {
@@ -2734,8 +2776,9 @@ function multiPane() {
 function multiUpgrade() {
   const w = lv.world, plan = planUpgrade(multiSel, w.buildings_flat(), k => defs[k].maxTier, upgrade_cost_flat, Array.from(w.stocks()));
   let done = 0, room = 0, poor = plan.poor.length; const fxAt: number[] = [];
-  for (const i of plan.go) {
-    const code = w.upgrade(i);
+  const codes = w.upgrade_batch(Uint32Array.from(plan.go));   // (the roads are rebuilt once, not after every building)
+  for (const [n, i] of plan.go.entries()) {
+    const code = codes[n] ?? -1;
     if (code === 0) { done++; commit({ op: 'upgrade', idx: i }); fxAt.push(i); } else if (code === -3) room++; else poor++;
   }
   const f = w.buildings_flat(); for (const i of fxAt.slice(0, 6)) placedFx(f[i * STRIDE], f[i * STRIDE + 2], f[i * STRIDE + 3], true);
@@ -2862,7 +2905,7 @@ function updateSelection() {
   if (d.cycle) {
     html += `<div class="stats"><div class="stat"><b>${STATUS[status]}</b><span>Status</span></div><div class="stat"><b>${icon('worker', 20)} ${f[o + 8]} / ${d.jobs * (tier + 1)}</b><span>Workers</span></div></div>
       <div><div class="eyebrow">Production cycle</div><div class="bar"><i style="width:${pct}%"></i></div></div>${depositHtml(selectedIdx)}
-      <p class="muted">${recipe.inputs.length ? `Uses ${io(scaled(recipe.inputs, tier))}<br>` : ''}Makes ${io(scaled(recipe.outputs, tier))} every ${d.cycle}s at full staffing. Needs ${d.jobs * (tier + 1)} workers (village workforce ${w.efficiency()}%).${tier < defs[kind].maxTier ? ` Upgrading needs ${d.jobs * (tier + 2)} workers and makes ${io(scaled(recipe.outputs, tier + 1))}.` : ''}</p>`;
+${perDayHtml(d, tier, recipe, Array.from(w.work_pace(selectedIdx)))}`;
   } else if (d.housing) html += `<div class="stats"><div class="stat"><b>${icon('house', 20)} ${f[o + 9]} / ${d.housing * (tier + 1)}</b><span>Residents</span></div></div><p class="muted">Residents walk the village paths to their workplaces each day.</p>`;
   if (kind === 15) html += `<p class="muted">Raises storage to ${600 + 200 * tier} per resource and expands your border.</p><h3>Diplomacy</h3><p class="muted">Envoys, treaties, trade and war are handled from the town hall.</p><button class="pbtn primary" data-act="diplomacy">Open diplomacy</button>`;
   if (kind === 15) html += kingdomRoadsHtml(stocks);
@@ -2885,24 +2928,24 @@ function updateSelection() {
   if (tier < defs[kind].maxTier) {
     const uc = upgrade_cost_flat(kind, tier + 1), cost: [number, number][] = []; for (let i = 0; i < uc.length; i += 2) cost.push([uc[i], uc[i + 1]]);
     const ok = cost.every(([r, n]) => stocks[r] >= n);
-    html += `<div class="actbar">${repairHtml}<div class="act-sec"><h3>Upgrade to ${tierName(kind, tier + 1)}</h3><div class="cost">${ui.costHtml(cost, stocks)}</div>${upgradeGainsHtml(kind, tier, hp[selectedIdx * 3 + 1], recipe)}<button class="pbtn primary" data-act="upgrade" ${ok ? '' : 'disabled'}>${ok ? 'Upgrade' : 'Not enough resources'}</button></div></div>`;
+    html += `<div class="actbar">${repairHtml}<div class="act-sec"><h3>Upgrade to ${tierName(kind, tier + 1)}</h3><div class="cost">${ui.costHtml(cost, stocks)}</div>${upgradeGainsHtml(kind, tier, hp[selectedIdx * 3 + 1], recipe, w.work_speed(selectedIdx))}<button class="pbtn primary" data-act="upgrade" ${ok ? '' : 'disabled'}>${ok ? 'Upgrade' : 'Not enough resources'}</button></div></div>`;
   } else html += `<div class="actbar">${repairHtml}<p><b>Fully upgraded.</b></p></div>`;
   html += optionsHtml(selectedIdx, kind, tier, stocks, kind === 47 ? 'Upgrades' : 'Design options');
   ui.setSelectedPane(html, kind !== 15 ? demolitionTip(w, selectedIdx) : '');
 }
 
 /** What pressing Upgrade on a building would change: each line is "what: now → after", so the player knows exactly what the cost buys. Mirrors the tier rules of the core (see `staffing`, `max_hp`, `storage_cap`). */
-function upgradeGainsHtml(kind: number, tier: number, maxHp: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }): string {
+function upgradeGainsHtml(kind: number, tier: number, maxHp: number, recipe: { inputs: [number, number][]; outputs: [number, number][] }, speed = 100): string {
   const d = defs[kind], t1 = tier + 1;
   const rows: [string, string, string][] = [];
   const io = (a: [number, number][]) => a.map(([r, n]) => `${resIcon(r)} ${n}`).join(' ');
   const hp1 = maxHp * (1 + 0.8 * t1) / (1 + 0.8 * tier);
-  rows.push(['Health', `${Math.round(maxHp)}`, `${Math.round(hp1)} hp (and fully repaired)`]);
+  rows.push(['Health', `${Math.round(maxHp)}`, `${Math.round(hp1)}`]);
   if (d.cycle && recipe.outputs.length) {
-    rows.push(['Makes each cycle', io(scaled(recipe.outputs, tier)), io(scaled(recipe.outputs, t1))]);
-    if (recipe.inputs.length) rows.push(['Uses each cycle', io(scaled(recipe.inputs, tier)), io(scaled(recipe.inputs, t1))]);
+    rows.push(['Makes per day', io(perDay(d, recipe.outputs, tier, speed)), io(perDay(d, recipe.outputs, t1, speed))]);
+    if (recipe.inputs.length) rows.push(['Uses per day', io(perDay(d, recipe.inputs, tier, speed)), io(perDay(d, recipe.inputs, t1, speed))]);
   }
-  if (d.jobs > 0) rows.push(['Workers needed', `${d.jobs * (tier + 1)}`, `${d.jobs * (tier + 2)}`]);
+  if (d.jobs > 0) rows.push(['Workers', `${d.jobs * (tier + 1)}`, `${d.jobs * (tier + 2)}`]);
   if (d.housing > 0) rows.push(['Housing', `${d.housing * (tier + 1)} people`, `${d.housing * (tier + 2)} people`]);
   if (kind === 15) {
     rows.push(['Storage per resource', `${600 + 200 * tier}`, `${600 + 200 * t1}`]);
@@ -2917,10 +2960,10 @@ function upgradeGainsHtml(kind: number, tier: number, maxHp: number, recipe: { i
   if (kind === 19) rows.push(['Trains', ['spearmen, archers', '+ swordsmen', '+ knights', '+ catapults'][tier], ['+ swordsmen', '+ knights', '+ catapults', ''][tier]]);
   if (d.name === 'Gate' && tier === 1) rows.push(['Gate', 'open', 'can be shut against raiders']);
   const fp0 = footprint(kind, tier), fp1 = footprint(kind, t1);
-  if (fp1 > fp0 + 0.05) rows.push(['Room it takes', `${fp0.toFixed(1)}`, `${fp1.toFixed(1)} (neighbours may need to make way)`]);
+  if (fp1 > fp0 + 0.05) rows.push(['Room it takes', `${fp0.toFixed(1)}`, `${fp1.toFixed(1)}`]);
   const fl0 = flammability_of(kind, tier), fl1 = flammability_of(kind, t1);
   if (fl1 < fl0 - 0.005) rows.push(['Fire risk', `${Math.round(fl0 * 100)}%`, `${Math.round(fl1 * 100)}%`]);
-  return `<div class="upgain"><div class="eyebrow">What you get</div><table class="gains">${rows.map(([k, a, b]) => `<tr><td>${k}</td><td>${a}</td><td>→</td><td><b>${b}</b></td></tr>`).join('')}</table></div>`;
+  return `<div class="upgain"><div class="eyebrow">After the upgrade</div><table class="gains">${rows.map(([k, a, b]) => `<tr><td>${k}</td><td>${a}</td><td>→</td><td><b>${b}</b></td></tr>`).join('')}</table></div>`;
 }
 
 /** The castle's road works: every road of the kingdom at once. The surfaces and designs of all the village's roads in numbers, and what it costs to resurface or style them all. */

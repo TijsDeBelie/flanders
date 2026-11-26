@@ -21,7 +21,7 @@ async function load(entry, minify) {
   return import(file.href);
 }
 
-const terrain = { heightAt: (x, z) => Math.sin(x * 0.1) + Math.cos(z * 0.1) };
+const terrain = { heightAt: (x, z) => Math.sin(x * 0.1) + Math.cos(z * 0.1), heightsHash: () => 0 };
 const radii = new Array(60).fill(3);
 /** Buildings (stride 10: kind, tier, x, z, rot, pad height, status, ...): the town hall, a house, a farm, a plaza, a moat piece and a wall. */
 const village = tier => Float32Array.from([

@@ -3,6 +3,7 @@ import type { Terrain } from './terrain';
 import { HALF } from './terrain';
 import { keys } from '../keys';
 import { viewW, viewH } from '../viewport';
+import { settings } from '../settings';
 import { cachedRect, DragCounter, Glide, grabShift, rayOnPlane, TOUCH_DRAG_PIXELS, touchFrame, TwistGate, twoFingerMode, zoomAbout, type P2, type TouchPoint } from './camerafx';
 
 /** How far the camera draws. The scene's fog (`FogExp2`, density 0.0016 in sky.ts) leaves 1.3% of a surface's colour at 1,300 m and 0.14% at 1,600 m, so anything
@@ -189,17 +190,17 @@ export class CameraRig {
   }
 
   update(dt: number) {
-    const sp = this.goal.dist * 0.9 * dt * (keys.isDown('panFast') ? 2.2 : 1);
+    const k = settings().cameraSpeed, sp = this.goal.dist * 0.9 * dt * k * (keys.isDown('panFast') ? 2.2 : 1);
     if (keys.isDown('panUp')) this.pan(0, -sp);
     if (keys.isDown('panDown')) this.pan(0, sp);
     if (keys.isDown('panLeft')) this.pan(-sp, 0);
     if (keys.isDown('panRight')) this.pan(sp, 0);
-    if (keys.isDown('rotLeft')) this.goal.yaw += dt * 1.6;
-    if (keys.isDown('rotRight')) this.goal.yaw -= dt * 1.6;
-    if (keys.isDown('tiltUp')) this.goal.pitch = THREE.MathUtils.clamp(this.goal.pitch + dt * 0.9, 0.18, 1.45);
-    if (keys.isDown('tiltDown')) this.goal.pitch = THREE.MathUtils.clamp(this.goal.pitch - dt * 0.9, 0.18, 1.45);
-    if (keys.isDown('zoomIn')) this.goal.dist = THREE.MathUtils.clamp(this.goal.dist * Math.exp(-dt * 1.4), 12, 260);
-    if (keys.isDown('zoomOut')) this.goal.dist = THREE.MathUtils.clamp(this.goal.dist * Math.exp(dt * 1.4), 12, 260);
+    if (keys.isDown('rotLeft')) this.goal.yaw += dt * 1.6 * k;
+    if (keys.isDown('rotRight')) this.goal.yaw -= dt * 1.6 * k;
+    if (keys.isDown('tiltUp')) this.goal.pitch = THREE.MathUtils.clamp(this.goal.pitch + dt * 0.9 * k, 0.18, 1.45);
+    if (keys.isDown('tiltDown')) this.goal.pitch = THREE.MathUtils.clamp(this.goal.pitch - dt * 0.9 * k, 0.18, 1.45);
+    if (keys.isDown('zoomIn')) this.goal.dist = THREE.MathUtils.clamp(this.goal.dist * Math.exp(-dt * 1.4 * k), 12, 260);
+    if (keys.isDown('zoomOut')) this.goal.dist = THREE.MathUtils.clamp(this.goal.dist * Math.exp(dt * 1.4 * k), 12, 260);
     if (this.glide.moving) { const d = this.glide.advance(dt); this.goal.x += d.x; this.goal.z += d.z; this.target.x += d.x; this.target.z += d.z; }
     if (this.tracked) {
       const point = this.tracked.read();

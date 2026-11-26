@@ -601,6 +601,12 @@ pub fn solid_radius_of(kind: u8, tier: u8) -> f32 { solid_radius(kind, tier) }
 #[wasm_bindgen]
 pub fn ring_radius_of(kind: u8, tier: u8) -> f32 { pathnet::ring_radius(kind, tier) }
 
+/// The lists of ground changes `height_layers` goes through: the village's own, or only those near a region (`layers_near`).
+struct Layers<'a> { levels: &'a [[f32; 4]], flats: &'a [[f32; 4]], roads: &'a [[f32; 6]], pads: &'a [Building], craters: &'a [[f32; 4]] }
+
+/// A walkable deck as an oriented strip: the middle, the direction along it, half its length (it is 3.8 wide).
+pub(crate) struct Deck { x: f32, y: f32, ux: f32, uy: f32, half: f32 }
+
 #[wasm_bindgen]
 pub fn upgrade_cost_flat(kind: u8, new_tier: u8) -> Vec<i32> {
     match DEFS.get(kind as usize) {
@@ -770,17 +776,18 @@ impl World {
         self.roads.clear();
         self.road_links.clear(); self.road_tier.clear();
         self.sync_road_conn();
+        let decks = self.decks();
         for i in 0..self.buildings.len() {
             let b = &self.buildings[i];
             if !roadline::has_stub(b.kind) { continue; }
             let (door, exit) = doors::door_world(b);
-            if (door.0 - exit.0).hypot(door.1 - exit.1) > 0.3 && self.leg_is_dry(door, exit) { self.roads.push([door.0, door.1, b.pad_h, exit.0, exit.1, b.pad_h]); self.road_links.push((i as u32, i as u32)); self.road_tier.push(0); }
+            if (door.0 - exit.0).hypot(door.1 - exit.1) > 0.3 && self.leg_is_dry_in(&decks, door, exit) { self.roads.push([door.0, door.1, b.pad_h, exit.0, exit.1, b.pad_h]); self.road_links.push((i as u32, i as u32)); self.road_tier.push(0); }
         }
         for e in self.road_edges() {
             let (ha, hb) = (self.buildings[e.a].pad_h, self.buildings[e.b].pad_h);
             let hs = self.grade_line(&e.pts, ha, hb);
             for (k, w) in e.pts.windows(2).enumerate() {
-                if self.leg_is_dry(w[0], w[1]) {
+                if self.leg_is_dry_in(&decks, w[0], w[1]) {
                     self.roads.push([w[0].0, w[0].1, hs[k], w[1].0, w[1].1, hs[k + 1]]);
                     self.road_links.push((e.a as u32, e.b as u32)); self.road_tier.push(self.edge_style(e.a, e.b).0);
                 }
@@ -826,21 +833,30 @@ impl World {
     }
 
     /// Is a straight leg of a route over dry, ordinary ground (not water and not a drawbridge deck)?
-    pub(crate) fn leg_is_dry(&self, a: (f32, f32), b: (f32, f32)) -> bool {
+    pub(crate) fn leg_is_dry(&self, a: (f32, f32), b: (f32, f32)) -> bool { self.leg_is_dry_in(&self.decks(), a, b) }
+
+    /// `leg_is_dry` against decks already gathered with `decks()`: the road rebuild asks about thousands of legs, and must not walk the whole building list for every sample point.
+    pub(crate) fn leg_is_dry_in(&self, decks: &[Deck], a: (f32, f32), b: (f32, f32)) -> bool {
         let l = (b.0 - a.0).hypot(b.1 - a.1); let st = (l / 1.5).ceil().max(1.0) as i32;
-        (0..=st).all(|q| { let t = q as f32 / st as f32; let (x, y) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t); !self.natural_water_covers(x, y, self.height_ground(x, y), 0.2) && !self.on_deck(x, y) })
+        (0..=st).all(|q| { let t = q as f32 / st as f32; let (x, y) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t); !self.natural_water_covers(x, y, self.height_ground(x, y), 0.2) && !Self::on_deck_in(decks, x, y) })
+    }
+
+    /// The decks that can be walked on right now: bridges, and drawbridges that are not drawn up.
+    pub(crate) fn decks(&self) -> Vec<Deck> {
+        self.buildings.iter().filter_map(|b| {
+            if b.kind == BRIDGE { let (ux, uy, l) = Self::bridge_dir(b); return Some(Deck { x: b.x, y: b.y, ux, uy, half: l / 2.0 }); }
+            if b.kind != DRAWBRIDGE || self.drawn_up(b) { return None; }
+            let a = b.rot as f32 * std::f32::consts::FRAC_PI_4; let (sx, sy) = (a.sin(), a.cos());
+            Some(Deck { x: b.x, y: b.y, ux: sx, uy: sy, half: 7.4 })
+        }).collect()
+    }
+
+    fn on_deck_in(decks: &[Deck], x: f32, y: f32) -> bool {
+        decks.iter().any(|d| { let (dx, dy) = (x - d.x, y - d.y); (dx * d.ux + dy * d.uy).abs() <= d.half && (dx * d.uy - dy * d.ux).abs() <= 1.9 })
     }
 
     /// Is the point on the deck of a lowered drawbridge?
-    fn on_deck(&self, x: f32, y: f32) -> bool {
-        if self.buildings.iter().any(|b| { if b.kind != BRIDGE { return false; } let (ux, uy, l) = Self::bridge_dir(b); let (dx, dy) = (x - b.x, y - b.y); (dx * ux + dy * uy).abs() <= l / 2.0 && (dx * uy - dy * ux).abs() <= 1.9 }) { return true; }
-        self.buildings.iter().any(|b| {
-            if b.kind != DRAWBRIDGE || self.drawn_up(b) { return false; }
-            let a = b.rot as f32 * std::f32::consts::FRAC_PI_4; let (sx, sy) = (a.sin(), a.cos());
-            let (dx, dy) = (x - b.x, y - b.y); let along = dx * sx + dy * sy; let across = dx * sy - dy * sx;
-            along.abs() <= 7.4 && across.abs() <= 1.9
-        })
-    }
+    fn on_deck(&self, x: f32, y: f32) -> bool { Self::on_deck_in(&self.decks(), x, y) }
 
     /// Recompute derived data after the building list or tiers changed.
     fn after_change(&mut self) {
@@ -1038,8 +1054,13 @@ impl World {
 
     /// `height_from` over `bs`, which must hold every ditch, earthwork and drawbridge of the village in their order in `buildings` (other buildings are skipped anyway).
     fn height_from_in(&self, x: f32, y: f32, moats: bool, built: bool, base: f32, bs: &[Building]) -> f32 {
+        self.height_layers(&Layers { levels: &self.levels, flats: &self.flats, roads: &self.roads, pads: &self.buildings, craters: &self.craters }, x, y, moats, built, base, bs)
+    }
+
+    /// The height at a point from the given layers of ground changes (see `Layers`): every one the loops below would skip for this point may be left out, nothing else.
+    fn height_layers(&self, lay: &Layers, x: f32, y: f32, moats: bool, built: bool, base: f32, bs: &[Building]) -> f32 {
         let mut h = base;
-        for l in &self.levels {   // ground levelled flat on purpose
+        for l in lay.levels {   // ground levelled flat on purpose
             let (dx, dy) = (x - l[0], y - l[1]); let reach = l[2] + LEVEL_BLEND;
             if dx.abs() > reach || dy.abs() > reach { continue; }
             let d = (dx * dx + dy * dy).sqrt();
@@ -1074,7 +1095,7 @@ impl World {
             if fr > 0.0 && h > RIVER_BED + rise { h += (RIVER_BED + rise - h) * fr.min(1.0); }
             ditch = fm.max(fr).min(1.0);
         }
-        for f in &self.flats {   // ground the player levelled: after the ditches and earthworks, so it hides whatever was dug there
+        for f in lay.flats {   // ground the player levelled: after the ditches and earthworks, so it hides whatever was dug there
             let (dx, dy) = (x - f[0], y - f[1]); let reach = f[2] + flatten::FLAT_SHOULDER;
             if dx.abs() > reach || dy.abs() > reach { continue; }
             let d = (dx * dx + dy * dy).sqrt();
@@ -1095,7 +1116,7 @@ impl World {
             if !self.river_covers(x, y, h) { h = lerp(h, b.pad_h, w * smoothstep(-0.8, 0.0, h)); }
         }
         if !built { return h; }
-        for s in &self.roads {
+        for s in lay.roads {
             let (minx, maxx) = (s[0].min(s[3]) - ROAD_OUTER, s[0].max(s[3]) + ROAD_OUTER);
             let (miny, maxy) = (s[1].min(s[4]) - ROAD_OUTER, s[1].max(s[4]) + ROAD_OUTER);
             if x < minx || x > maxx || y < miny || y > maxy { continue; }
@@ -1108,7 +1129,7 @@ impl World {
                 h = lerp(h, lerp(s[2], s[5], t), (1.0 - smoothstep(ROAD_INNER, ROAD_OUTER, d)) * smoothstep(-0.6, 0.0, h));
             }
         }
-        for b in &self.buildings {
+        for b in lay.pads {
             let d = &DEFS[b.kind as usize];
             if is_edit(b.kind) { continue; }   // ditches and earthworks were applied above, before roads and pads
             if !d.pad { continue; }
@@ -1136,7 +1157,7 @@ impl World {
                 h = lerp(h, b.pad_h, weight);
             }
         }
-        for c in &self.craters {
+        for c in lay.craters {
             let (dx, dy) = (x - c[0], y - c[1]);
             if dx.abs() > c[2] || dy.abs() > c[2] { continue; }
             let d = (dx * dx + dy * dy).sqrt();
@@ -1145,10 +1166,42 @@ impl World {
         h
     }
 
+    /// The ground changes that can reach any point of a rectangle, in their usual order. Everything left out would be skipped by `height_layers` at every point of it (each test below is
+    /// the loop's own `continue` test, widened by a little), so the heights are the same to the bit; it spares a walk over every building and road for each sample.
+    fn layers_near(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 6]>, Vec<Building>, Vec<Building>, Vec<[f32; 4]>) {
+        const PAD: f32 = 1.0;
+        let near = |cx: f32, cy: f32, reach: f32| cx + reach + PAD >= x0 && cx - reach - PAD <= x1 && cy + reach + PAD >= y0 && cy - reach - PAD <= y1;
+        let levels = self.levels.iter().filter(|l| near(l[0], l[1], l[2] + LEVEL_BLEND)).copied().collect();
+        let flats = self.flats.iter().filter(|f| near(f[0], f[1], f[2] + flatten::FLAT_SHOULDER)).copied().collect();
+        let roads = self.roads.iter().filter(|s| s[0].min(s[3]) - ROAD_OUTER - PAD <= x1 && s[0].max(s[3]) + ROAD_OUTER + PAD >= x0 && s[1].min(s[4]) - ROAD_OUTER - PAD <= y1 && s[1].max(s[4]) + ROAD_OUTER + PAD >= y0).copied().collect();
+        let craters = self.craters.iter().filter(|c| near(c[0], c[1], c[2])).copied().collect();
+        // ditches, earthworks and drawbridges (the `bs` list), and the buildings with a pad (the pads list)
+        let edits = self.buildings.iter().filter(|b| {
+            let bank = match b.kind { MOAT => MOAT_FLOOR * moat_scale(b) + CHANNEL_BANK, RIVER => RIVER_FLOOR + CHANNEL_BANK, RAISE | LOWER => 5.0, DRAWBRIDGE => 24.0, _ => return false };
+            near(b.x, b.y, bank)
+        }).cloned().collect();
+        let pads = self.buildings.iter().filter(|b| {
+            let d = &DEFS[b.kind as usize];
+            if is_edit(b.kind) || !d.pad { return false; }
+            let r0 = if b.kind == TOWN_HALL && b.tier >= 3 { footprint(TOWN_HALL, 3) } else { pad_inner(d) };
+            near(b.x, b.y, (r0 + 3.5).max(if b.kind == FARM { FARM_PAD_REACH } else { 0.0 }))
+        }).cloned().collect();
+        (levels, flats, roads, edits, pads, craters)
+    }
+
     /// Heights of an nx*ny grid (with pads) â€“ used to refresh the mesh after building.
     pub fn terrain_region(&self, x0: f32, y0: f32, nx: u32, ny: u32, step: f32) -> Vec<f32> {
-        let mut out = Vec::with_capacity((nx * ny) as usize);
-        for j in 0..ny { for i in 0..nx { out.push(self.height_at(x0 + i as f32 * step, y0 + j as f32 * step)); } }
+        // worked out a small tile at a time: the pieces that can reach a tile are picked out once for its samples, not looked through again for every one of them
+        const TILE: u32 = 8;
+        let mut out = vec![0.0f32; (nx * ny) as usize];
+        for tj in (0..ny).step_by(TILE as usize) { for ti in (0..nx).step_by(TILE as usize) {
+            let (ei, ej) = ((ti + TILE).min(nx), (tj + TILE).min(ny));
+            let (xa, xb) = (x0 + ti as f32 * step, x0 + (ei - 1) as f32 * step);
+            let (ya, yb) = (y0 + tj as f32 * step, y0 + (ej - 1) as f32 * step);
+            let (levels, flats, roads, edits, pads, craters) = self.layers_near(xa.min(xb), ya.min(yb), xa.max(xb), ya.max(yb));
+            let lay = Layers { levels: &levels, flats: &flats, roads: &roads, pads: &pads, craters: &craters };
+            for j in tj..ej { for i in ti..ei { let (x, y) = (x0 + i as f32 * step, y0 + j as f32 * step); out[(j * nx + i) as usize] = self.height_layers(&lay, x, y, true, true, self.base(x, y), &edits); } }
+        } }
         out
     }
 
@@ -1724,6 +1777,16 @@ impl World {
         0
     }
 
+    /// Upgrade several buildings in the order given: what `upgrade` returns for each. The roads are worked out once at the end instead of after every one, which keeps upgrading a whole
+    /// selection quick in a big village. The result is the same as upgrading one by one (peers replay them one by one), because `upgrade` never reads what `after_change` derives.
+    pub fn upgrade_batch(&mut self, idxs: &[u32]) -> Vec<i32> {
+        self.defer_roads = true;
+        let out: Vec<i32> = idxs.iter().map(|&i| self.upgrade(i)).collect();
+        self.defer_roads = false;
+        self.after_change();
+        out
+    }
+
     /// Choose the village's flag: 0 for none, otherwise a packed flag number (pattern, three colours, emblem; bit 24 always set). Free, and changeable. Anything else is refused.
     /// Bits 25-27 of the style are the village's roof tile palette (0-7, see `roof()`): part of the same number, so it travels, saves and hashes with the flag.
     pub fn set_style(&mut self, style: u32) -> bool { if style != 0 && (style < (1 << 24) || style >= (1 << 28) || style & (1 << 24) == 0) { return false; } self.style = style; true }
@@ -1855,8 +1918,7 @@ impl World {
             let need = d.cycle * 100;
             let ob = self.buildings[i].opts;
             let road_pace = if self.road_served(i, &reach) { 100 } else { roadnet::UNROADED_PACE };
-            let boost = if kind == FARM { 100 + if ob & 1 != 0 { 10 } else { 0 } + if ob & 4 != 0 { 5 } else { 0 } + if ob & 8 != 0 { 10 } else { 0 } + tier2_speed(kind, ob) }
-                else if ob != 0 && !matches!(kind, HOUSE | WALL | TOWER | GATE | DRAWBRIDGE | BARRACKS | KEEP | TOWN_HALL | CHAPEL | WELL | BRIDGE | HOSPITAL | GRAVEYARD) { 100 + if ob & 4 != 0 { 10 } else { 0 } + if ob & 8 != 0 { 5 } else { 0 } + tier2_speed(kind, ob) } else { 100 };   // scarecrow, fence and barn; awning and stone footing: the building works that much faster
+            let boost = self.work_boost(i);
             let mut p = self.buildings[i].progress + self.buildings[i].beff * boost as u32 / 100 * road_pace / 100;
             let mult = 4 + 5 * tier as i32;   // better buildings employ more people and make more: x1, x2.25, x3.5, x4.75
             let scale = |n: i32| ((n * mult + 2) / 4).max(n);
@@ -2448,6 +2510,20 @@ impl World {
     /// Flat [kind, x, y, remaining, max, ...] (stride 5).
     /// 1 for every deposit that lies dormant (used up, regrowing), 0 otherwise; one entry per deposit, in the order of `deposits_flat`.
     pub fn deposits_asleep(&self) -> Vec<u8> { self.deposits.iter().map(|d| d.asleep as u8).collect() }
+    /// How fast the building at `i` works, in percent (100 = base): the design upgrades that make a field or workplace faster (scarecrow, barn, awning, stone footing and so on).
+    fn work_boost(&self, i: usize) -> u32 {
+        let (kind, ob) = (self.buildings[i].kind, self.buildings[i].opts);
+        if kind == FARM { 100 + if ob & 1 != 0 { 10 } else { 0 } + if ob & 4 != 0 { 5 } else { 0 } + if ob & 8 != 0 { 10 } else { 0 } + tier2_speed(kind, ob) }
+        else if ob != 0 && !matches!(kind, HOUSE | WALL | TOWER | GATE | DRAWBRIDGE | BARRACKS | KEEP | TOWN_HALL | CHAPEL | WELL | BRIDGE | HOSPITAL | GRAVEYARD) { 100 + if ob & 4 != 0 { 10 } else { 0 } + if ob & 8 != 0 { 5 } else { 0 } + tier2_speed(kind, ob) } else { 100 }   // scarecrow, fence and barn; awning and stone footing: the building works that much faster
+    }
+    /// What sets the building's work pace, each in percent (100 = no effect): [design upgrades, road to the castle (50 with none), how fully it is staffed].
+    pub fn work_pace(&self, idx: u32) -> Vec<u32> {
+        let i = idx as usize; if i >= self.buildings.len() { return vec![100, 100, 100]; }
+        let road = if self.road_served(i, &self.road_reach()) { 100 } else { roadnet::UNROADED_PACE };
+        vec![self.work_boost(i), road, self.buildings[i].beff.min(100)]
+    }
+    /// The building's whole work pace in percent: the three parts of `work_pace` multiplied.
+    pub fn work_speed(&self, idx: u32) -> u32 { self.work_pace(idx).iter().product::<u32>() / 10_000 }
     /// What the building at `idx` works: [deposit index, remaining, maximum, dormant 0/1, ore taken per day at its present staffing], or empty when it needs no deposit.
     pub fn building_deposit(&self, idx: u32) -> Vec<f32> {
         let Some(b) = self.buildings.get(idx as usize) else { return vec![] };
@@ -2455,7 +2531,7 @@ impl World {
         if d.req != 1 || b.aux < 0 { return vec![]; }
         let Some(dep) = self.deposits.get(b.aux as usize) else { return vec![] };
         let mult = 4 + 5 * b.tier as i32; let out: i32 = d.outputs.iter().map(|&(_, n)| ((n * mult + 2) / 4).max(n)).sum();
-        let eff = b.beff as f32 / 100.0;
+        let eff = self.work_speed(idx) as f32 / 100.0;
         vec![b.aux as f32, dep.rem as f32, dep.max as f32, dep.asleep as u8 as f32, out as f32 * DAY as f32 / d.cycle as f32 * eff]
     }
     /// Once a day every deposit regrows a little, faster when no working building stands at it; one used up and dormant wakes at `WAKE_PCT` of its maximum. Cleared deposits (`max == 0`) stay gone.
@@ -2876,8 +2952,13 @@ impl World {
         // a peer chooses these numbers: NaN, infinity or a point far off the map would make the router search forever
         if ![tx, ty, ax, ay].iter().all(|v| v.is_finite() && v.abs() <= MAP_LIMIT) { return -1; }
         self.det_march_inner(id, tx, ty, if attack { Some((ax, ay)) } else { None }, false) }
-    /// Send the army back to the town hall, where it rejoins the barracks.
-    pub fn det_recall(&mut self, id: u32) -> i32 { let (hx, hy) = (self.buildings[0].x, self.buildings[0].y + 9.0); self.det_march_inner(id, hx, hy, None, true) }
+    /// Send the army back to the town hall, where it rejoins the barracks. The Castle fills far more ground than the hall (its solid mass reaches about 22 from its middle), so a point 9 in front of it
+    /// lies inside the fortress and no route can end there: the army goes to the castle's front gate instead.
+    pub fn det_recall(&mut self, id: u32) -> i32 {
+        let hall = &self.buildings[0];
+        let (hx, hy) = if hall.kind == TOWN_HALL && hall.tier >= 3 { self.default_rally(1) } else { (hall.x, hall.y + 9.0) };
+        self.det_march_inner(id, hx, hy, None, true)
+    }
     pub fn det_split(&mut self, id: u32, take: &[u32]) -> u32 { let Some(t) = kinds(take) else { return 0 }; self.det_split_inner(id, t) }
     pub fn det_merge(&mut self, a: u32, b: u32) -> bool { self.det_merge_inner(a, b) }
     pub fn det_halt(&mut self, id: u32) {
@@ -4350,6 +4431,24 @@ mod road_tests {
 #[cfg(test)]
 mod perf_tests {
     use super::*;
+    #[test]
+    fn upgrade_batch_matches_upgrading_one_by_one() {
+        let make = || {
+            let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0);
+            for _ in 0..3 { w.upgrade(0); }
+            for i in 0..30 { let a = i as f32 * 0.9; let r = 16.0 + (i % 6) as f32 * 4.0; w.place(HOUSE, (a.cos() * r).round() as i32, (a.sin() * r).round() as i32, 0); }
+            w
+        };
+        let (mut a, mut b) = (make(), make());
+        let idxs: Vec<u32> = (1..a.buildings.len() as u32).collect();
+        let one: Vec<i32> = idxs.iter().map(|&i| a.upgrade(i)).collect();
+        let many = b.upgrade_batch(&idxs);
+        assert_eq!(one, many);
+        assert!(many.iter().any(|&c| c == 0));
+        assert_eq!(a.state_hash(), b.state_hash());
+        assert_eq!(a.roads, b.roads);
+    }
+
     #[test]
     fn many_buildings_stay_fast() {
         let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0);

@@ -208,7 +208,7 @@ export class Game {
    * Do one action. Forms (all coordinates relative to the hall, x east and y south):
    *   place kind dx dy [rot] [search]   build; mines and quarries snap to the nearest matching deposit, waterwheels and fishing huts to the bank; `search` tries nearby spots (0-12 units) when the first is refused
    *   up idx | opt idx bit [on] | demo idx true | fix idx | gar idx archers | draw idx up | gate idx closed | field idx mode(0 sow,1 fallow,2 rotate)
-   *   train kind n | hero | form s a w k c r? | march id dx dy | recall id | visit id | decide option | bribe (pay the raiders to leave: only a bandit raid that has not struck yet; see status.attack_price)
+   *   train kind n | hero | form s a w k c r? | march id dx dy | recall id | defend id (a field army marches out to join a fight at home) | visit id | decide option | bribe (pay the raiders to leave: only a bandit raid that has not struck yet; see status.attack_price)
    * Returns { ok: true, ... } or { ok: false, e: why }.
    */
   act(a) {
@@ -253,6 +253,7 @@ export class Game {
       case 'form': { const u = a.slice(1); if (u.length === 5) u.push(0); if (u.length !== 6 || !u.every(v => isInt(v) && v >= 0 && v <= 300)) return fail('six counts: spear archer sword knight catapult ram (the ram may be left out)'); const id = w.det_form(Uint32Array.from(u)); return id ? logged({ ok: true, id }, ['form', ...u]) : fail('not enough soldiers in the barracks'); }
       case 'march': { const [, id, dx, dy] = a; if (![id, dx, dy].every(isInt) || Math.abs(dx) > 1100 || Math.abs(dy) > 1100) return fail('bad arguments'); const c = w.det_march(id, this.origin.x + dx, this.origin.z + dy, false, 0, 0); return c === 0 ? logged({ ok: true }, ['march', id, dx, dy]) : fail(c === -1 ? 'no such army' : c === -2 ? 'unreachable' : c === -3 ? 'catapults need soldiers to clear forest' : 'water too wide'); }
       case 'recall': { if (!isInt(idx)) return fail('bad arguments'); const c = w.det_recall(idx); return c === 0 ? logged({ ok: true }, ['recall', idx]) : fail('no such army'); }
+      case 'defend': { if (!isInt(idx)) return fail('bad arguments'); const c = w.det_defend(idx); return c === 0 ? logged({ ok: true }, ['defend', idx]) : fail(c === -10 ? 'there is no fight to join' : c === -1 ? 'no such army' : 'it cannot get there (code ' + c + ')'); }
       case 'visit': { if (!isInt(idx)) return fail('bad arguments'); const c = w.visit_neutral(idx); return c >= 0 ? logged({ ok: true, kind: c }, ['visit', idx]) : fail(c === -1 ? 'no such army' : c === -2 ? 'not close enough to a place' : c === -4 ? 'a fight is already on' : 'already visited'); }
       case 'bribe': { const c = w.bribe(); return c === 0 ? logged({ ok: true }, ['bribe']) : fail(c === -6 ? 'not enough gold: ' + w.bribe_price() + ' wanted' : 'they cannot be bought off now (no bandit raid, it has begun, or the boss refuses)'); }
       case 'decide': { if (!isInt(idx) || idx < 0 || idx > 2) return fail('bad arguments'); const c = w.choose(idx); return c === 0 ? logged({ ok: true }, ['decide', idx]) : fail('no decision waiting'); }

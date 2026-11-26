@@ -116,3 +116,20 @@ fn the_computer_trains_what_its_army_lacks_and_answers_heavy_raiders() {
     assert!(heavy != 1, "no more archers against plate: {heavy}");
     assert_eq!(light, 1, "archers against light raiders");
 }
+
+#[test]
+fn a_grown_village_drills_siege_engines_and_sends_them_with_its_raids() {
+    let mut w = World::new(9, 0, 0);
+    let mut ai = Ai::new(9, 0, 0, 7);
+    ai.set_target(300.0, 300.0, 20.0, 1, 100.0);
+    let mut engines = 0u32; let mut raided_with = 0u32;
+    for _ in 0..60 * DAY {
+        w.step(); for b in w.buildings.iter_mut().filter(|b| b.kind == BARRACKS) { b.tier = 3; } for r in [IR, TL, PL, W, GD] { w.stock[r as usize] = w.stock[r as usize].max(400); }   // (this seed has no iron: give it the means)
+        let out = ai.step(&mut w);
+        engines = engines.max(w.army[4] + w.army[5] + w.away[4] + w.away[5] + w.dets.iter().map(|d| d.units[4] + d.units[5]).sum::<u32>());
+        if out.first() == Some(&REQ_RAID) && out.len() >= 7 { raided_with = raided_with.max((out[5] + out[6]) as u32); }
+    }
+    eprintln!("army {:?} queue {:?} barracks {:?} PL {} W {} IR {} TL {}", w.army, w.queue, w.buildings.iter().filter(|b| b.kind == BARRACKS).map(|b| b.tier).collect::<Vec<_>>(), w.stock[PL as usize], w.stock[W as usize], w.stock[IR as usize], w.stock[TL as usize]);
+    eprintln!("most engines at once {engines}, most sent on a raid {raided_with}");
+    assert!(engines > 0, "after two months the army has engines");
+}

@@ -142,3 +142,23 @@ test('the embassy is taken down for new foreign flags and is drawn again by the 
   assert.equal(embassies(), 1, 'drawn again with the new flags');
   assert.equal(view.setForeignFlags([flag]), false, 'the same flags change nothing');
 });
+
+test('far away, the houses of a square are drawn as small proxies, and come back in full when the camera does', async () => {
+  const THREE = await import('three');
+  const view = new B.VillageView(0x2f5fa8), radii = defs.map(d => d.r);
+  // a hall and one house of each tier, all in the same 36-unit square
+  const flat = []; flat.push(15, 0, 0, 0, 0, 1, 4, 0, 0, 0); [0, 1, 2, 3].forEach((t, i) => flat.push(0, t, 8 + i * 6, 6, i, 1, 4, 0, 0, 0));
+  view.sync(Float32Array.from(flat), radii);
+  const near = new THREE.Vector3(0, 30, 20), far = new THREE.Vector3(0, 900, 700), range = 100;
+  view.update(1, near, range);   // (the square is merged once it has been quiet for a moment)
+  const meshes = () => view.batchRoot.children.filter(m => m.isMesh);
+  const proxy = () => meshes().find(m => m.userData.far), houses = () => meshes().filter(m => m.userData.house);
+  assert.ok(proxy(), 'the square has a proxy for its houses'); assert.ok(houses().length > 0, 'and its houses are merged apart from the rest');
+  const tris = m => (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
+  assert.equal(tris(proxy()), 4 * 18, 'eighteen triangles a house: a box and a gable roof');
+  assert.equal(proxy().visible, false); assert.ok(houses().every(m => m.visible), 'close by, the houses are drawn as ever');
+  view.update(0.1, far, range);
+  assert.equal(proxy().visible, true, 'from far away the proxies stand in for the houses'); assert.ok(houses().every(m => !m.visible));
+  view.update(0.1, near, range);
+  assert.equal(proxy().visible, false); assert.ok(houses().every(m => m.visible), 'and the houses are back when the camera is');
+});
