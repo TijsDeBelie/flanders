@@ -2952,8 +2952,13 @@ impl World {
         // a peer chooses these numbers: NaN, infinity or a point far off the map would make the router search forever
         if ![tx, ty, ax, ay].iter().all(|v| v.is_finite() && v.abs() <= MAP_LIMIT) { return -1; }
         self.det_march_inner(id, tx, ty, if attack { Some((ax, ay)) } else { None }, false) }
-    /// Send the army back to the town hall, where it rejoins the barracks.
-    pub fn det_recall(&mut self, id: u32) -> i32 { let (hx, hy) = (self.buildings[0].x, self.buildings[0].y + 9.0); self.det_march_inner(id, hx, hy, None, true) }
+    /// Send the army back to the town hall, where it rejoins the barracks. The Castle fills far more ground than the hall (its solid mass reaches about 22 from its middle), so a point 9 in front of it
+    /// lies inside the fortress and no route can end there: the army goes to the castle's front gate instead.
+    pub fn det_recall(&mut self, id: u32) -> i32 {
+        let hall = &self.buildings[0];
+        let (hx, hy) = if hall.kind == TOWN_HALL && hall.tier >= 3 { self.default_rally(1) } else { (hall.x, hall.y + 9.0) };
+        self.det_march_inner(id, hx, hy, None, true)
+    }
     pub fn det_split(&mut self, id: u32, take: &[u32]) -> u32 { let Some(t) = kinds(take) else { return 0 }; self.det_split_inner(id, t) }
     pub fn det_merge(&mut self, a: u32, b: u32) -> bool { self.det_merge_inner(a, b) }
     pub fn det_halt(&mut self, id: u32) {

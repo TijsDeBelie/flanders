@@ -217,6 +217,16 @@ fn the_army_comes_out_of_the_fight_with_its_survivors_and_can_leave_early() {
 }
 
 #[test]
+fn a_field_army_can_be_sent_home_to_a_castle() {
+    let mut w = weak_village(); w.army = [10, 4, 4, 0, 0, 0];
+    w.buildings[0].tier = 3; w.after_change();
+    let id = w.det_form(&[10, 4, 4, 0, 0, 0]);
+    assert!(id > 0);
+    assert_eq!(w.det_recall(id), 0, "the way home ends at the castle gate, not inside the fortress");
+    assert_eq!(w.det_flat()[8] as u8, march::S_HOME);
+}
+
+#[test]
 fn the_standing_army_can_be_sent_out_to_meet_the_raiders() {
     let mut w = weak_village(); w.army = [10, 4, 0, 0, 0, 0];
     assert!(w.start_raid(0.0, &[6, 2, 0, 0, 0, 0], 0));
