@@ -489,7 +489,7 @@ export function buildRam(): THREE.Group {
 }
 
 /** Catapult arm angle about x: resting (cup low at the back) and at the top of the throw (cup up and forward of the pivot). */
-export const ARM_REST = -0.9, ARM_THROW = 1.9;
+export const ARM_REST = -0.68, ARM_THROW = 1.9;
 
 export function buildCatapult(): THREE.Group {
   if (!catapultFrame) {
@@ -504,8 +504,8 @@ export function buildCatapult(): THREE.Group {
     }
     parts.push(box(1.44, 0.18, 0.24, BEAM, 0, 0.67, -1.3), box(1.45, 0.18, 0.24, BEAM, 0, 0.67, 1.36), across(0.12, 1.49, DARK, 0, 1.69, 0.45), across(0.10, 1.42, ROPE, 0, 0.92, -0.98));
     catapultFrame = merge(parts);
-    catapultArm = merge([box(0.19, 0.20, 2.85, BEAM, 0, 0, -0.93), box(0.23, 0.24, 0.21, STRAP, 0, 0, -0.08), box(0.22, 0.21, 0.10, STRAP, 0, 0, -1.72), cyl(0.32, 0.25, 0.13, DARK, 0, 0.075, -2.30, 10), T(tint(new THREE.TorusGeometry(0.28, 0.035, 4, 12).rotateX(-Math.PI / 2), STRAP), 0, 0.15, -2.3)]);
-    catapultStone = tint(new THREE.IcosahedronGeometry(0.26, 0), 0x969187);
+    catapultArm = merge([box(0.19, 0.20, 2.85, BEAM, 0, 0, -0.93), box(0.23, 0.24, 0.21, STRAP, 0, 0, -0.08), box(0.22, 0.21, 0.10, STRAP, 0, 0, -1.72), cyl(0.34, 0.26, 0.14, DARK, 0, 0.08, -2.30, 10), T(tint(new THREE.TorusGeometry(0.28, 0.035, 4, 12).rotateX(-Math.PI / 2), STRAP), 0, 0.15, -2.3)]);
+    catapultStone = tint(new THREE.IcosahedronGeometry(0.28, 1), 0x969187);
   }
   const g = new THREE.Group(), arm = new THREE.Group();
   arm.position.set(0, 1.69, 0.45); g.add(siegeMesh(catapultFrame), arm);
