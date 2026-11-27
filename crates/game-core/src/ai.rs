@@ -5,7 +5,8 @@
 //! `caravan_send`, `det_form`, `det_march`, ...), and when the world refuses (cannot afford, no room, no barracks, too soon) the AI waits. Its choices are a pure function of
 //! its own seeded stream, the village's real numbers and the few numbers the page tells it about its target.
 use crate::catalog::*;
-use crate::march::{S_ARRIVED, S_BLOCKED};
+use crate::march::{S_ARRIVED, S_BLOCKED, S_IDLE};
+use crate::{terrain, wilds};
 use crate::military::*;
 use crate::{Rng, World, DAY, JK_ENVOY, TREATY_TRADE, TREATY_PEACE, TREATY_ALLIANCE};
 use wasm_bindgen::prelude::*;
@@ -142,6 +143,11 @@ pub struct Ai {
     target: Option<(f32, f32, f32, i32, f32)>,
     their_force: u32,
     raids: u32,
+    /// The wild places (see wilds.rs): the expedition out now (army id, the place's centre, when it set out), when to look for the next, when to look at the roads, and the shafts a road was tried to.
+    wild: Option<(u32, f32, f32, u64)>,
+    next_wild: u64,
+    next_road: u64,
+    roads_tried: Vec<u32>,
 }
 
 impl Army { fn idle(&self) -> bool { matches!(self, Army::Idle) } }
@@ -161,7 +167,7 @@ impl Ai {
         for _ in 0..4 { rng.next(); }
         let aggr = rng.range(3);
         let used = vec![0; plots(layout).len()];
-        Ai { rng, layout: layout % LAYOUTS, tag, aggr, used, next_build: 40, next_train: 0, next_up: 0, next_research: 0, next_envoy: 2 * DAY, next_offer: 6 * DAY, next_caravan: 6 * DAY, next_raid: 0, scan_cool: vec![], no_up: vec![], army: Army::Idle, target: None, their_force: 0, raids: 0 }
+        Ai { rng, layout: layout % LAYOUTS, tag, aggr, used, next_build: 40, next_train: 0, next_up: 0, next_research: 0, next_envoy: 2 * DAY, next_offer: 6 * DAY, next_caravan: 6 * DAY, next_raid: 0, scan_cool: vec![], no_up: vec![], army: Army::Idle, target: None, their_force: 0, raids: 0, wild: None, next_wild: 4 * DAY, next_road: 0, roads_tried: vec![] }
     }
 
     pub fn layout_count() -> u32 { LAYOUTS }
@@ -196,6 +202,7 @@ impl Ai {
         self.military(w);
         self.diplomacy(w);
         self.consider_raid(w);
+        self.wild_places(w);
         out
     }
 }
@@ -464,6 +471,91 @@ impl Ai {
             self.next_raid = w.tick + DAY; return;   // no way through: the men go back to the barracks and it tries again another day
         }
         self.army = Army::Marching(id); self.raids += 1; let _ = &mut self.rng;
+    }
+
+    // ------------------------------------------------------------------------------------------------ wild places
+    /// The computer uses the wild places as a player would (only through the same `World` calls): tithes to the abbeys it has met, small parties to meet the monks
+    /// and loot the ruins, a garrison for a mineshaft, a band to clear a camp it is clearly strong enough for, and a road out to every shaft it holds.
+    fn wild_places(&mut self, w: &mut World) {
+        let day = w.tick / DAY;
+        w.wilds.fit(w.seed);
+        // the monks: a tithe when their healing is due and someone is sick, or to keep their herbs coming
+        let places = terrain::neutrals(w.seed);
+        for (i, n) in places.iter().enumerate() {
+            if n.0 != 0 || !w.neutral_done.get(i).copied().unwrap_or(false) { continue; }
+            let p = w.wilds.places[i];
+            if w.tick < p.sacked_until { continue; }
+            let want = (w.sick > 0 && w.tick >= p.next_heal) || p.goodwill < wilds::HERBAL_GOODWILL + 5;
+            if want && w.stock[GD as usize] >= w.tithe_cost() + 80 { w.wild_act(1, i as u32); break; }
+        }
+        if w.tick >= self.next_road { self.next_road = w.tick + 2 * DAY; self.roads_to_shafts(w); }
+        // an expedition out: it goes in when it stands at the place, and then marches home
+        if let Some((id, tx, ty, since)) = self.wild {
+            let Some(d) = w.dets.iter().find(|d| d.id == id) else { self.wild = None; return };
+            let (st, near) = (d.state, (d.x - tx).hypot(d.y - ty) < 14.0);
+            if (st == S_IDLE || st == S_ARRIVED) && near {
+                let _ = w.visit_neutral(id);
+                if w.dets.iter().any(|d| d.id == id) { let _ = w.det_recall(id); }
+                self.wild = None; self.next_wild = w.tick + 2 * DAY;
+            } else if st == S_BLOCKED || st == S_IDLE || w.tick > since + 12 * DAY {
+                if w.det_recall(id) != 0 { self.disband(w, id); }
+                self.wild = None; self.next_wild = w.tick + DAY;
+            }
+            return;
+        }
+        if day < 4 || w.tick < self.next_wild || w.battle.is_some() || !self.army.idle() { return; }
+        self.next_wild = w.tick + DAY;
+        let (hx, hy) = (w.buildings[0].x, w.buildings[0].y);
+        let stay = (Self::force(w) / 4).max(3);
+        let foot: u32 = w.army[..4].iter().sum();
+        if foot <= stay { return; }
+        let spare = foot - stay;
+        const REACH_AI: f32 = 420.0;
+        let near = |x: f32, y: f32| (x - hx).hypot(y - hy);
+        // what to go for, cheapest first: monks to meet and ruins to loot (three spearmen), a shaft to hold (a garrison and two to walk home), a camp to clear (a strong band)
+        let mut goal: Option<(f32, f32, [u32; NK])> = None;
+        let small = |w: &World| -> Option<[u32; NK]> { let mut u = [0u32; NK]; let mut left = 3u32; for k in 0..4 { let n = w.army[k].min(left); u[k] = n; left -= n; } (left == 0).then_some(u) };
+        let mut first: Vec<(f32, usize)> = places.iter().enumerate().filter(|(i, n)| (n.0 == 0 || n.0 == 1) && !w.neutral_done[*i] && near(n.1, n.2) < REACH_AI && !(n.0 == 0 && w.tick < w.wilds.places[*i].sacked_until)).map(|(i, n)| (near(n.1, n.2), i)).collect();
+        first.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some(&(_, i)) = first.first() { if let Some(u) = small(w) { goal = Some((places[i].1, places[i].2, u)); } }
+        if goal.is_none() && day >= 8 && spare >= wilds::GARRISON_MAX + 2 && (w.wilds.shafts.iter().filter(|s| s.garrison.iter().sum::<u32>() > 0).count() as u32) < 1 + day as u32 / 20 {
+            let shafts = terrain::mineshafts(w.seed);
+            let mut free: Vec<(f32, usize)> = shafts.iter().enumerate().filter(|(j, m)| w.wilds.shafts[*j].garrison.iter().sum::<u32>() == 0 && near(m.1, m.2) < REACH_AI && w.nearest_outlaws(m.1, m.2) > wilds::OUTLAW_REACH * 0.5).map(|(j, m)| (near(m.1, m.2), j)).collect();
+            free.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some(&(_, j)) = free.first() {
+                let mut u = [0u32; NK]; let mut left = wilds::GARRISON_MAX + 2;
+                for k in 0..4 { let n = w.army[k].min(left); u[k] = n; left -= n; }
+                if left == 0 { goal = Some((shafts[j].1, shafts[j].2, u)); }
+            }
+        }
+        if goal.is_none() && day >= [16u64, 13, 10][self.aggr as usize] {
+            // the strongest band it can spare, against the weakest camp in reach that it beats by a margin
+            let mut u = [0u32; NK]; for k in 0..4 { u[k] = w.army[k] * spare / foot.max(1); }
+            let power: f32 = (0..NK).map(|k| u[k] as f32 * UNITS[k].hp * UNITS[k].dmg / UNITS[k].cd.max(0.5)).sum();
+            let mut camps: Vec<(f32, usize)> = places.iter().enumerate().filter(|(i, n)| n.0 == 2 && !w.neutral_done[*i] && near(n.1, n.2) < REACH_AI && w.camp_terms(*i).0 * 1.25 <= power).map(|(i, n)| (near(n.1, n.2), i)).collect();
+            camps.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some(&(_, i)) = camps.first() { goal = Some((places[i].1, places[i].2, u)); }
+        }
+        let Some((tx, ty, units)) = goal else { return };
+        let (dx, dy) = (hx - tx, hy - ty); let dl = dx.hypot(dy).max(1.0);
+        let (px, py) = (tx + dx / dl * 11.0, ty + dy / dl * 11.0);
+        let id = w.det_form_inner(units); if id == 0 { return; }
+        if w.det_march_inner(id, px, py, None, false) != 0 { self.disband(w, id); self.next_wild = w.tick + 2 * DAY; return; }
+        self.wild = Some((id, tx, ty, w.tick));
+    }
+
+    /// A road from the castle's gate out to every shaft it holds that has none yet (once per shaft: a road that cannot be laid all the way is not tried again).
+    fn roads_to_shafts(&mut self, w: &mut World) {
+        let shafts = terrain::mineshafts(w.seed);
+        for (j, m) in shafts.iter().enumerate() {
+            if w.wilds.shafts[j].garrison.iter().sum::<u32>() == 0 || self.roads_tried.contains(&(j as u32)) || w.shaft_road(m.1, m.2) { continue; }
+            let plan = w.shaft_road_plan(j as u32);
+            if plan.is_empty() { self.roads_tried.push(j as u32); continue; }
+            if w.stock[W as usize] < World::road_plan_cost(&plan) + 40 { continue; }   // (not yet: it waits for the wood)
+            self.roads_tried.push(j as u32);
+            let _ = w.lay_road_plan(&plan);
+            break;   // one road at a time
+        }
     }
 
     /// A field army that cannot get anywhere is dissolved: its men go back to the barracks.

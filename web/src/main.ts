@@ -943,10 +943,10 @@ const PLACE_TEXT = [
 const visitOnArrival = new Map<number, { x: number; z: number }>();
 let selectedPlace: { x: number; z: number } | null = null;
 /** A wild place as the core tells it (`neutral_info`): a, b, c depend on the kind (abbey: goodwill, days to the next healing, days sacked; camp: returns, days before outlaws may return, watched; shaft: garrison, ore a day, ore). */
-type PlaceInfo = { kind: number; x: number; z: number; done: boolean; need: number; gold: number; iron: number; h: number; index: number; a: number; b: number; c: number };
+type PlaceInfo = { kind: number; x: number; z: number; done: boolean; need: number; gold: number; iron: number; h: number; index: number; a: number; b: number; c: number; road: boolean; pile: number; cart: number; cartDays: number };
 function placeInfo(x: number, z: number, r = 3): PlaceInfo | null {
   const v = lv.world.neutral_info(x, z, r); if (!v.length) return null;
-  return { kind: v[0], x: v[1], z: v[2], done: v[3] > 0, need: v[4], gold: v[5], iron: v[6], h: v[7], index: v[8], a: v[9], b: v[10], c: v[11] };
+  return { kind: v[0], x: v[1], z: v[2], done: v[3] > 0, need: v[4], gold: v[5], iron: v[6], h: v[7], index: v[8], a: v[9], b: v[10], c: v[11], road: v[12] > 0, pile: v[13], cart: v[14], cartDays: v[15] };
 }
 /** The wild place on the ground under the pointer, if one has been found. */
 function placeUnder(r: THREE.Raycaster): PlaceInfo | null {
@@ -991,7 +991,15 @@ function placePane(p: PlaceInfo) {
   }
   if (p.kind === 5) {
     const ore = p.c === 5 ? 'iron ore' : 'gold ore';
-    html += `<div><h3>Ore</h3><p>${resIcon(p.c)} ${p.b} ${ore} a day while it is held.</p></div>`;
+    html += `<div><h3>Ore</h3><p>${resIcon(p.c)} ${p.b} ${ore} a day is dug while it is held.</p>`;
+    if (p.road) html += `<p>A road joins it to your castle: everything dug comes home every day.</p>`;
+    else {
+      html += `<p>No road: a slow mule train carries ${p.b * 2} at a time${p.cart > 0 ? ` (now ${p.cart} on the way, home in ${p.cartDays} day${p.cartDays === 1 ? '' : 's'})` : ''}. Most of what is dug waits at the mouth${p.pile > 0 ? ` (${p.pile} now)` : ''}.</p>`;
+      if (p.done) { const plan = lv.world.shaft_road_plan(p.index), cost = plan.length / 2, wood = lv.world.stocks()[0];
+        html += plan.length ? `<button class="pbtn primary" data-act="place:road:${p.index}" ${wood < cost ? 'disabled' : ''}>Lay a road to it (${cost} wood)</button>` : '<p class="muted">There is no dry way to lay a road from your castle to it.</p>'; }
+    }
+    html += `</div>`;
+    if (p.done) html += `<p class="muted">The garrison eats from your stores like every soldier; if the food runs out, one of them deserts each day.</p>`;
     html += p.h > 0 ? `<p class="muted">Outlaws camp within reach: about a ${Math.max(1, Math.round(p.h))}% chance a day of an attack on a small garrison (less with more men). Each attack kills half the garrison. Clearing the camp nearby ends it.</p>` : '<p class="muted">No outlaw camp is within reach: it is safe for now.</p>';
     if (p.done) html += `<button class="pbtn" data-act="place:abandon:${p.index}">Abandon (the garrison comes home)</button>`;
   }
@@ -1013,6 +1021,18 @@ function placeAct(a: string) {
   const p = selectedPlace && placeInfo(selectedPlace.x, selectedPlace.z); if (!p) return;
   const [, what, idText] = a.split(':'), id = Number(idText);
   if (what === 'enter') { visitOnArrival.delete(id); visitPlace(id); updateSelection(); }
+  else if (what === 'road') {   // the road the core plans, laid as `road` commands of up to 60 points, each starting where the last ended
+    const plan = lv.world.shaft_road_plan(id); if (!plan.length) { ui.toast('There is no dry way to lay a road there.', 'bad'); return; }
+    let code = 0;
+    for (let i = 0; code === 0 && i + 1 < plan.length / 2; ) {   // pieces of up to 60 points (the core's `lay_road` takes 64), each starting on the last point of the one before
+      const end = Math.min(i + 59, plan.length / 2 - 1), piece = Array.from(plan.slice(i * 2, (end + 1) * 2));
+      code = lv.world.lay_road(Int32Array.from(piece)); commit({ op: 'road', units: piece });   // (sent even when it stopped part way: what was laid is laid on every copy)
+      i = end;
+    }
+    afterLocalChange(); updateHud();
+    ui.toast(code === 0 ? 'The road to the mineshaft is laid: its ore now comes home every day.' : `The road could not be laid all the way (${PLACE_ERRORS[code] ?? 'something is in the way'}). Finish it with the road tool.`, code === 0 ? 'good' : 'bad');
+    updateSelection();
+  }
   else if (what === 'tithe' || what === 'abandon') {
     const action = what === 'tithe' ? 1 : 2, code = lv.world.wild_act(action, id);
     if (code >= 0) { commit({ op: 'wild', kind: action, idx: id }); afterLocalChange(); updateHud(); ui.toast(action === 2 ? 'The garrison leaves the mineshaft and marches home to the barracks.' : code === 0 ? 'The monks take your tithe and heal your sick.' : 'The monks take your tithe and pray for your village.', 'good'); }

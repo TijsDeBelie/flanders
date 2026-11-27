@@ -133,3 +133,18 @@ fn a_grown_village_drills_siege_engines_and_sends_them_with_its_raids() {
     eprintln!("most engines at once {engines}, most sent on a raid {raided_with}");
     assert!(engines > 0, "after two months the army has engines");
 }
+
+#[test]
+fn the_computer_uses_the_wild_places() {
+    // over a few weeks the computer meets the monks or loots a ruin, holds a mineshaft or clears a camp; whatever it holds, it feeds and tries to join by road
+    let mut used = 0;
+    for (seed, layout) in [(11u64, 0u32), (3, 2), (5, 5)] {
+        let (w, _) = play(seed, layout, 30);
+        let met = terrain::neutrals(w.seed).iter().enumerate().filter(|(i, n)| n.0 != 3 && w.neutral_done[*i]).count();
+        let held = w.wilds.shafts.iter().filter(|s| s.garrison.iter().sum::<u32>() > 0).count();
+        eprintln!("seed {seed} layout {layout}: places used {met}, shafts held {held}, soldiers {}", w.army.iter().sum::<u32>());
+        used += met + held;
+        assert!(w.stock.iter().all(|&s| s >= 0));
+    }
+    assert!(used > 0, "the computers went out to the wild places");
+}

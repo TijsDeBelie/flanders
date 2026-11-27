@@ -106,11 +106,23 @@ fn an_army_claims_a_mineshaft_its_garrison_sends_ore_home_and_comes_back_when_ab
     assert_eq!(w.visit_neutral(id), -3, "already held");
     let r = if ore == 0 { IO } else { GO } as usize; let before = w.stock[r];
     w.dets.clear();
-    days(&mut w, 1); assert!(w.stock[r] > before || w.wilds.shafts[0].garrison.iter().sum::<u32>() < GARRISON_MAX, "ore comes home");
+    // no road: the ore goes home by mule train, slowly
+    let n = if ore == 0 { SHAFT_IRON } else { SHAFT_GOLD };
+    days(&mut w, 1);
+    let sh = w.wilds.shafts[0];
+    if sh.garrison.iter().sum::<u32>() == GARRISON_MAX {   // (unless outlaws struck on the first day)
+        assert_eq!((sh.pile, sh.cart), (0, n), "the day's digging leaves by mule train");
+        assert_eq!(sh.cart_due, w.tick + World::cart_days(w.home_distance(mx, my)) * DAY);
+        assert_eq!(w.stock[r], before, "nothing has arrived yet");
+        assert!(World::cart_days(w.home_distance(mx, my)) >= CART_MIN_DAYS);
+    }
     let held = w.wilds.shafts[0].garrison; let army = w.army;
     assert_eq!(w.wild_act(2, 0), if held.iter().sum::<u32>() > 0 { 0 } else { -3 });
     for k in 0..NK { assert_eq!(w.army[k], army[k] + held[k], "the garrison comes home"); }
     assert_eq!(w.wild_act(2, 0), -3); assert_eq!(w.wild_act(9, 0), -1); assert_eq!(w.wild_act(2, 9999), -1);
+    // a mule train on the road still arrives after the shaft is given up
+    let (cart, due) = (w.wilds.shafts[0].cart, w.wilds.shafts[0].cart_due);
+    if due > 0 { let ore_before = w.stock[r]; while w.tick < due { days(&mut w, 1); } assert_eq!(w.stock[r], ore_before + cart, "the mule train arrives"); }
     // attacks: more often with fewer men, never far from every camp
     assert!(World::shaft_attack_chance(10.0, 1) > World::shaft_attack_chance(10.0, 8));
     assert_eq!(World::shaft_attack_chance(OUTLAW_REACH, 1), 0.0);
@@ -134,8 +146,49 @@ fn neutral_info_tells_abbeys_camps_and_shafts_apart() {
     let mut w = village();
     let (ai, ax, ay) = first_of(0); let (ci, cx, cy) = first_of(2); let (_, mx, my) = terrain::mineshafts(SEED)[0];
     for (x, y) in [(ax, ay), (cx, cy), (mx, my)] { assert!(w.cheat(13, x as i32, y as i32)); }
-    let a = w.neutral_info(ax, ay, 3.0); assert_eq!(a.len(), 12); assert_eq!((a[0], a[8]), (0.0, ai as f32));
+    let a = w.neutral_info(ax, ay, 3.0); assert_eq!(a.len(), 16); assert_eq!((a[0], a[8]), (0.0, ai as f32));
     let c = w.neutral_info(cx, cy, 3.0); assert_eq!((c[0], c[8], c[9]), (2.0, ci as f32, 0.0)); assert_eq!(c[4], w.camp_terms(ci).0);
     let m = w.neutral_info(mx, my, 3.0); assert_eq!((m[0], m[3], m[8], m[9]), (5.0, 0.0, 0.0, 0.0)); assert!(m[10] > 0.0 && (m[11] == IO as f32 || m[11] == GO as f32));
     assert!(w.neutrals_flat().chunks(4).any(|p| p[0] == 5.0 && p[1] == mx), "a found shaft is listed as kind 5");
+}
+
+/// A village with a shaft held at `j` (by a garrison put there directly) and plenty of food.
+fn holding(j: usize) -> World { let mut w = village(); w.tick = 5 * DAY; w.wilds.shafts[j].garrison = [6, 2, 0, 0, 0, 0]; w.wilds.shafts[j].claimed_at = w.tick; w.dets.clear(); w }
+
+#[test]
+fn a_road_to_the_castle_brings_the_ore_home_every_day_a_mule_train_much_less() {
+    let shafts = terrain::mineshafts(SEED);
+    // find a shaft a road can be laid to, along the dry way from the castle's gate
+    let mut found = None;
+    let mut order: Vec<usize> = (0..shafts.len()).collect(); let w0 = village(); order.sort_by(|&a, &b| w0.home_distance(shafts[a].1, shafts[a].2).total_cmp(&w0.home_distance(shafts[b].1, shafts[b].2)));
+    for j in order {
+        let mut w = holding(j); w.stock[W as usize] = 5000;
+        let plan = w.shaft_road_plan(j as u32); if plan.is_empty() { continue; }
+        assert!(plan.chunks(2).collect::<Vec<_>>().windows(2).all(|p| ((p[1][0] - p[0][0]) as f32).hypot((p[1][1] - p[0][1]) as f32) <= 10.0), "points close enough to join");
+        let code = w.lay_road_plan(&plan);
+        if code == 0 && w.shaft_road(shafts[j].1, shafts[j].2) { found = Some((j, w)); break; }
+    }
+    let (j, mut road) = found.expect("some shaft can be reached by road");
+    let (ore, mx, my) = shafts[j]; let r = if ore == 0 { IO } else { GO } as usize; let n = if ore == 0 { SHAFT_IRON } else { SHAFT_GOLD };
+    let mut mules = holding(j);
+    assert!(!mules.shaft_road(mx, my));
+    let (mut by_road, mut by_mule) = (0, 0);
+    for _ in 0..30 {   // (the store is emptied each morning so its cap never stops what arrives; outlaws kept off: the garrison is put back each day)
+        for (w, got) in [(&mut road, &mut by_road), (&mut mules, &mut by_mule)] { w.stock[r] = 0; days(w, 1); *got += w.stock[r]; w.wilds.shafts[j].garrison = [6, 2, 0, 0, 0, 0]; }
+    }
+    assert!(by_road >= n * 28, "by road nearly all of a month's digging: {by_road}");
+    assert!(by_mule > 0 && by_mule * 2 < by_road, "by mule train much less: {by_mule} against {by_road} ({:?}, dist {})", mules.wilds.shafts[j], mules.home_distance(mx, my));
+    assert!(mules.wilds.shafts[j].pile <= n * PILE_DAYS, "the pile at the mouth is capped");
+    let info = { let mut w = road; w.cheat(13, mx as i32, my as i32); w.neutral_info(mx, my, 3.0) }; assert_eq!(info[12], 1.0, "the panel knows of the road");
+}
+
+#[test]
+fn the_garrison_eats_and_walks_off_when_there_is_no_food() {
+    let w0 = village(); let (_, eat0) = w0.appetite();
+    let mut w = holding(0); let (soldiers, eat) = w.appetite();
+    assert_eq!(soldiers, w0.appetite().0 + 8, "the garrison is fed with the other soldiers"); assert!(eat > eat0);
+    for &(f, _) in FOODS.iter() { w.stock[f as usize] = 0; } w.meal_credit = 0;
+    days(&mut w, 1); assert_eq!(w.wilds.shafts[0].garrison.iter().sum::<u32>(), 7, "one deserts a day while the stores are empty");
+    assert!(w.take_events().chunks(4).any(|e| e[0] == EV_WILD && e[1] == WILD_DESERTED));
+    days(&mut w, 7); assert_eq!(w.wilds.shafts[0].garrison.iter().sum::<u32>(), 0); assert_eq!(w.wilds.shafts[0].claimed_at, 0, "and with the last one the shaft is lost");
 }

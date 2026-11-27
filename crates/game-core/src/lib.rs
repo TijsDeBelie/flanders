@@ -741,10 +741,11 @@ impl World {
         v
     }
     fn shaft_held(&self, j: usize) -> bool { self.wilds.shafts.get(j).is_some_and(|s| s.garrison.iter().sum::<u32>() > 0) }
-    /// The known neutral place nearest (x, y) within `r`: [kind, x, y, done, strength needed (0 when none or unknown), gold, iron, h, index, a, b, c], or empty.
+    /// The known neutral place nearest (x, y) within `r`: [kind, x, y, done, strength needed (0 when none or unknown), gold, iron, h, index, a, b, c, road, pile, cart, cart days], or empty.
     /// Kind 4 is the plague doctor's camp, 5 an abandoned mineshaft (index into the shafts; done: you hold it). What a camp pays is what `visit_neutral` would give now.
     /// a, b, c: abbey goodwill, days to the next healing a tithe buys, days it lies sacked; camp: times it has come back, days before outlaws may return (cleared), 1 if watched;
-    /// shaft: soldiers in its garrison, ore a day, the ore (resource number), and for the chance of an attack a day in percent see `h`.
+    /// shaft: soldiers in its garrison, ore a day, the ore (resource number), and for the chance of an attack a day in percent see `h`. Then four more, for a shaft only (0 otherwise):
+    /// 1 if a road joins it to the castle, ore waiting at its mouth, ore on the road by mule train, days before that train arrives.
     pub fn neutral_info(&self, x: f32, y: f32, r: f32) -> Vec<f32> {
         let mut best: Option<(f32, Vec<f32>)> = None;
         let days = |t: u64| (t.saturating_sub(self.tick) as f32 / DAY as f32).ceil();
@@ -764,9 +765,9 @@ impl World {
                 2 => (p.rounds as f32, if done && p.cleared_at > 0 { days(p.cleared_at + wilds::REOCCUPY_DAYS * DAY) } else { 0.0 }, self.watched_place(nx, ny) as u8 as f32),
                 _ => (0.0, 0.0, 0.0),
             };
-            best = Some((d, vec![kind as f32, nx, ny, done as u8 as f32, need, gold, iron, h, i as f32, a, b, c]));
+            best = Some((d, vec![kind as f32, nx, ny, done as u8 as f32, need, gold, iron, h, i as f32, a, b, c, 0.0, 0.0, 0.0, 0.0]));
         }
-        if let Some(c) = self.plague_camp { let d = (c.x - x).hypot(c.y - y); if d <= r && best.as_ref().map_or(true, |b| d < b.0) { best = Some((d, vec![4.0, c.x, c.y, 0.0, 0.0, 0.0, 0.0, 0.5, -1.0, 0.0, 0.0, 0.0])); } }
+        if let Some(c) = self.plague_camp { let d = (c.x - x).hypot(c.y - y); if d <= r && best.as_ref().map_or(true, |b| d < b.0) { best = Some((d, vec![4.0, c.x, c.y, 0.0, 0.0, 0.0, 0.0, 0.5, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])); } }
         for (j, &(ore, mx, my)) in terrain::mineshafts(self.seed).iter().enumerate() {
             let d = (mx - x).hypot(my - y);
             if d > r || !self.is_seen(mx, my) || best.as_ref().is_some_and(|b| b.0 <= d) { continue; }
@@ -774,7 +775,10 @@ impl World {
             let near = self.nearest_outlaws(mx, my);
             let risk = if near < wilds::OUTLAW_REACH { World::shaft_attack_chance(near, held.max(wilds::GARRISON_MIN)) * 100.0 } else { 0.0 };
             let (res, n) = if ore == 0 { (IO, wilds::SHAFT_IRON) } else { (GO, wilds::SHAFT_GOLD) };
-            best = Some((d, vec![5.0, mx, my, (held > 0) as u8 as f32, 0.0, 0.0, 0.0, risk, j as f32, held as f32, n as f32, res as f32]));
+            let sh = self.wilds.shafts.get(j).copied().unwrap_or_default();
+            let cart_days = if sh.cart_due > 0 { days(sh.cart_due) } else { 0.0 };
+            best = Some((d, vec![5.0, mx, my, (held > 0) as u8 as f32, 0.0, 0.0, 0.0, risk, j as f32, held as f32, n as f32, res as f32,
+                self.shaft_road(mx, my) as u8 as f32, sh.pile as f32, sh.cart as f32, cart_days]));
         }
         best.map(|b| b.1).unwrap_or_default()
     }
@@ -1000,7 +1004,7 @@ impl World {
     /// Whole meals in the stores.
     pub(crate) fn food(&self) -> i32 { (self.food_units() / self.meal_units() as i64).min(i32::MAX as i64) as i32 }
     fn appetite(&self) -> (u32, i32) {
-        let soldiers = self.army.iter().chain(&self.away).chain(self.dets.iter().flat_map(|d| &d.units)).copied().sum::<u32>();
+        let soldiers = self.army.iter().chain(&self.away).chain(self.dets.iter().flat_map(|d| &d.units)).copied().sum::<u32>() + self.garrisoned();   // (the garrisons of the mineshafts eat too)
         let heads = (self.population + soldiers) as i32;
         let units = if self.estate.active { heads * 2 } else { (heads + 5) / 10 * 4 };
         (soldiers, units)
@@ -5040,7 +5044,7 @@ mod neutral_tests {
         let mut w = world();
         assert!(w.neutral_info(bx, by, 3.0).is_empty(), "an unseen camp is not told");
         assert!(w.cheat(13, bx as i32, by as i32));
-        let v = w.neutral_info(bx + 2.0, by, 5.0); assert_eq!(v.len(), 12);
+        let v = w.neutral_info(bx + 2.0, by, 5.0); assert_eq!(v.len(), 16);
         assert_eq!((v[0], v[3]), (2.0, 0.0), "a bandit camp, still held"); assert!((v[1] - bx).abs() < 0.01 && (v[2] - by).abs() < 0.01);
         assert!(v[4] >= 9000.0 && v[4] <= 23000.0, "the strength it takes: {}", v[4]);
         let weak = army_at(&mut w, bx, by, [2, 0, 0, 0, 0, 0]); assert!(w.det_power(weak) < v[4], "a small party is told it is too weak");
