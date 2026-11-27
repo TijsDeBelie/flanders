@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Terrain } from './terrain';
+import { Particles } from './fx';
+import { HAT, TOOL, type Crowd, type Draw } from './crowd';
 
 /**
- * The neutral places of the map as models: an abbey (kind 0), a ruined castle (1), a bandit camp (2), a lair (3) and the plague doctor's camp (4).
+ * The neutral places of the map as models: an abbey (kind 0), a ruined castle (1), a bandit camp (2), a lair (3), the plague doctor's camp (4) and an abandoned mineshaft (5).
+ * Held places have people: outlaws round the fire and on the lookout, monks in the cloister, your garrison at a shaft (drawn with the crowd, near the camera only), and smoke rises from their fires.
  * Every piece stands on the ground right under it. The pieces that never move are merged into one mesh per material when the place is built, so a camp of
  * a few hundred pieces is drawn in a dozen calls; only the flames, flags and tents (which slump when the place is cleared) stay meshes of their own.
  */
@@ -15,7 +18,7 @@ const M = {
   iron: std(0x3c3d42, { metalness: 0.5, roughness: 0.6 }), gold: std(0xe0b030, { metalness: 0.8, roughness: 0.35, emissive: 0x5a3c00, emissiveIntensity: 0.6 }),
   sack: std(0xa89268), hide: std(0x7b5a3c, { side: THREE.DoubleSide }), meat: std(0x8a3b2a), dark: std(0x0c0a08), leaf: std(0x46602f), ivy: std(0x3f5a2c),
   cloth: [std(0x7a2f26, { side: THREE.DoubleSide }), std(0x6b5a3a, { side: THREE.DoubleSide }), std(0x4c5a3a, { side: THREE.DoubleSide }), std(0x5a4a40, { side: THREE.DoubleSide })],
-  banner: std(0x9c2a22, { side: THREE.DoubleSide }), sick: std(0x4a6b34, { side: THREE.DoubleSide }), abbeyBanner: std(0xe8e0c8, { side: THREE.DoubleSide }),
+  banner: std(0x9c2a22, { side: THREE.DoubleSide }), ours: std(0x2f5fa8, { side: THREE.DoubleSide }), soot: std(0x1c1a18), rail: std(0x2e2a26, { metalness: 0.3 }), sick: std(0x4a6b34, { side: THREE.DoubleSide }), abbeyBanner: std(0xe8e0c8, { side: THREE.DoubleSide }),
   ground: std(0x5b4a35, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), sickGround: std(0x4a4a30, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
   path: std(0x8a7a5c, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
   fire: new THREE.MeshBasicMaterial({ color: 0xff8a1e }), sickFire: new THREE.MeshBasicMaterial({ color: 0x7dff4a }),
@@ -47,19 +50,30 @@ const G = {
   sack: new THREE.SphereGeometry(0.42, 6, 5).scale(1, 0.75, 0.85).translate(0, 0.3, 0), bar: new THREE.CylinderGeometry(0.05, 0.05, 1, 4).translate(0, 0.5, 0),
   tower: new THREE.CylinderGeometry(2.2, 2.5, 1, 10).translate(0, 0.5, 0), spire: new THREE.ConeGeometry(1.4, 3.2, 4).rotateY(Math.PI / 4).translate(0, 1.6, 0),
   gable: (() => { const s = new THREE.Shape([new THREE.Vector2(-1, 0), new THREE.Vector2(1, 0), new THREE.Vector2(0, 0.8)]); return new THREE.ExtrudeGeometry(s, { depth: 1, bevelEnabled: false }).translate(0, 0, -0.5); })(),
-  bush: new THREE.IcosahedronGeometry(1, 0),
+  bush: new THREE.IcosahedronGeometry(1, 0), wheel: new THREE.TorusGeometry(0.9, 0.08, 4, 12), cartWheel: new THREE.CylinderGeometry(0.25, 0.25, 0.1, 8).rotateX(Math.PI / 2),
 };
 
-interface Place { g: THREE.Group; kind: number; x: number; z: number; done: boolean; flames: THREE.Object3D[]; tents: THREE.Object3D[]; flags: THREE.Object3D[]; loot: THREE.Object3D[]; seed: number; statics: THREE.Mesh[] }
+interface Place {
+  g: THREE.Group; kind: number; x: number; z: number; done: boolean; flames: THREE.Object3D[]; tents: THREE.Object3D[]; flags: THREE.Object3D[]; loot: THREE.Object3D[]; seed: number; statics: THREE.Mesh[];
+  fires: { x: number; z: number }[];   // the fires (relative), where smoke rises and outlaws sit
+  lookout: { x: number; z: number } | null;
+  held: THREE.Object3D[]; boards: THREE.Object3D[];   // a shaft: the garrison's things (shown while yours), the planks across its mouth (while abandoned)
+  sackFx: THREE.Object3D[]; sacked: boolean;          // an abbey: soot and flames while it lies sacked
+  smokeT: number;
+}
 type Opt = { y?: number; s?: number | [number, number, number]; ry?: number; rx?: number; rz?: number; shadow?: boolean; live?: boolean };
 
 /** How far from its centre each kind of place reaches (for picking and the selection ring). */
-export const PLACE_RADIUS = [11, 12, 12, 9, 9];
+export const PLACE_RADIUS = [11, 12, 12, 9, 9, 9];
+const SKINS = [0xe0b48f, 0xc99a74, 0xa87655, 0xe8c4a0, 0x8a5c3c];
 
 export class Camps {
   group = new THREE.Group();
   private places = new Map<string, Place>();
-  constructor(private terrain: Terrain) {}
+  private smoke = new Particles(900, false, 0.25, 0.35);
+  private alarm: Place | null = null;
+  private lastT = -1;
+  constructor(private terrain: Terrain) { this.group.add(this.smoke.points); this.smoke.points.frustumCulled = false; }
 
   /** A piece of the place, standing on the ground at (x, z) (relative to the place); `live` keeps it a mesh of its own (it moves or changes later). */
   private mesh(p: Place, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, z: number, o: Opt = {}) {
@@ -92,7 +106,7 @@ export class Camps {
     for (let i = 0; i < 3; i++) this.mesh(p, G.log, M.darkWood, x, z, { y: 0.15 + i * 0.05, ry: i * 1.05, s: 0.8, shadow: false });
     this.mesh(p, G.rock, M.ash, x, z, { s: [0.7, 0.12, 0.7], y: 0.02, shadow: false });
     const f = this.mesh(p, G.flame, sick ? M.sickFire : M.fire, x, z, { y: 0.2, shadow: false, live: true });
-    p.flames.push(f);
+    p.flames.push(f); p.fires.push({ x, z });
     if (spit) {   // a spit on two forked posts with a joint of meat
       for (const s of [-1, 1]) { this.mesh(p, G.post, M.wood, x + s * 1.3, z, { s: [1, 1.6, 1] }); this.mesh(p, G.post, M.wood, x + s * 1.3, z, { y: 1.4, s: [0.7, 0.4, 0.7], rz: s * 0.5 }); }
       this.mesh(p, G.bar, M.iron, x - 1.5, z, { y: 1.55, s: [1.2, 3, 1.2], rz: -Math.PI / 2, shadow: false });
@@ -134,6 +148,7 @@ export class Camps {
   }
   /** A lookout on four legs with a railing and a hide roof. */
   private lookout(p: Place, x: number, z: number) {
+    p.lookout = { x, z };
     for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) this.mesh(p, G.post, M.wood, x + dx, z + dz, { s: [1, 5, 1] });
     this.mesh(p, G.box, M.wood, x, z, { y: 4.8, s: [2.6, 0.2, 2.6] });
     for (const [dx, dz, ry] of [[0, -1.25, 0], [0, 1.25, 0], [-1.25, 0, Math.PI / 2], [1.25, 0, Math.PI / 2]]) this.mesh(p, G.box, M.darkWood, x + dx, z + dz, { y: 5.0, s: [2.6, 0.7, 0.12], ry });
@@ -165,7 +180,7 @@ export class Camps {
 
   private build(kind: number, x: number, z: number): Place {
     const g = new THREE.Group(); g.position.set(x, this.terrain.heightAt(x, z), z);
-    const p: Place = { g, kind, x, z, done: false, flames: [], tents: [], flags: [], loot: [], seed: Math.floor(x * 7 + z * 13), statics: [] };
+    const p: Place = { g, kind, x, z, done: false, flames: [], tents: [], flags: [], loot: [], seed: Math.floor(x * 7 + z * 13), statics: [], fires: [], lookout: null, held: [], boards: [], sackFx: [], sacked: false, smokeT: 0 };
     const gap = rand(p.seed + 9) * 6.283;
     if (kind === 2) {   // bandit camp: a stockade of sharpened stakes round tents, a chief's yurt, a fire with a spit, loot, a lookout and a cage
       this.ground(p, 10, M.ground);
@@ -217,6 +232,34 @@ export class Camps {
       for (let i = 0; i < 6; i++) { const [px, pz] = at(-2.6 + (i % 3) * 2.6, 4.2 + Math.floor(i / 3) * 3.4); this.mesh(p, G.bush, M.leaf, px, pz, { s: [0.7, 0.45, 0.7], y: 0.15 }); }
       for (let i = 0; i < 5; i++) { const [px, pz] = at(-7.5 + i * 1.2, -4.6 - (i % 2) * 0.6); this.mesh(p, G.box, M.stone, px, pz, { s: [0.5, 0.8 + (i % 2) * 0.25, 0.14], ry: -ry, rz: (rand(p.seed + i) - 0.5) * 0.2 }); }   // graves
       { const [px, pz] = at(7.5, 1.5); this.flag(p, px, pz, M.abbeyBanner, 0.8); }
+      // sacked: soot streaks on the nave and flames on its roof (hidden until outlaws come)
+      for (const u of [-3, 0, 3]) { const [px, pz] = at(u, 0); const y = base + 5.7 - (this.terrain.heightAt(x + px, z + pz) - g.position.y); const f = this.mesh(p, G.flame, M.fire, px, pz, { y, s: 1.8, shadow: false, live: true }); f.visible = false; p.sackFx.push(f); }   // flames along the ridge
+      for (const [u, side] of [[-2, 1], [2.5, -1], [0.5, 1]]) { const [px, pz] = at(u, side * 1.2); const y = base + 4.95 - (this.terrain.heightAt(x + px, z + pz) - g.position.y); const m = this.mesh(p, G.box, M.soot, px, pz, { y, s: [2.4, 0.12, 1.8], ry: -ry, rx: side * 0.67, shadow: false, live: true }); m.visible = false; p.sackFx.push(m); }   // burnt holes in the roof
+      for (const side of [-1, 1]) { const [px, pz] = at(1, side * 2.24); const m = this.mesh(p, G.box, M.soot, px, pz, { y: base + 1 - (this.terrain.heightAt(x + px, z + pz) - g.position.y), s: [6, 3, 0.08], ry: -ry, shadow: false, live: true }); m.visible = false; p.sackFx.push(m); }
+    } else if (kind === 5) {   // an abandoned mineshaft: an adit in a rocky knoll with a headframe and a spoil heap; boarded up until an army claims it, then your garrison camps there
+      this.ground(p, 8.5, M.path);
+      const c = Math.cos(gap), s = Math.sin(gap), at = (u: number, v: number): [number, number] => [c * u - s * v, s * u + c * v];
+      for (let i = 0; i < 7; i++) { const v = (i - 3) * 1.5, u = -3.2 - Math.abs(v) * 0.35 - rand(p.seed + i) * 0.8; const [px, pz] = at(u, v); this.mesh(p, G.rock, M.stone, px, pz, { s: [2.4 + rand(i) * 0.8, 2.6 - Math.abs(i - 3) * 0.45 + rand(i + 2) * 0.5, 2.2], y: 0.6, ry: gap + rand(i * 3) }); }   // the knoll
+      for (let i = 0; i < 4; i++) { const [px, pz] = at(-5.6 - rand(i) * 1.5, (i - 1.5) * 2.2); this.mesh(p, G.rock, M.stone, px, pz, { s: [2.6, 2.4, 2.4], y: 1.2, ry: i }); }
+      { const [px, pz] = at(-1.9, 0); this.mesh(p, G.box, M.dark, px, pz, { s: [0.5, 2.1, 1.9], ry: -gap }); }   // the mouth
+      for (const v of [-1.15, 1.15]) { const [px, pz] = at(-1.6, v); this.mesh(p, G.box, M.darkWood, px, pz, { s: [0.4, 2.5, 0.4], ry: -gap }); }
+      { const [px, pz] = at(-1.6, 0); this.mesh(p, G.box, M.darkWood, px, pz, { y: 2.3, s: [0.5, 0.45, 3.0], ry: -gap }); }
+      for (let i = 0; i < 3; i++) { const [px, pz] = at(-1.35, 0); const b = this.mesh(p, G.box, M.wood, px, pz, { y: 0.5 + i * 0.6, s: [0.08, 0.25, 2.2], ry: -gap, rx: (i - 1) * 0.12, live: true }); p.boards.push(b); }   // boarded up
+      // the headframe: two A-frames with a winding wheel
+      { const [hx, hz] = at(1.2, -3.4);
+        for (const v of [-0.8, 0.8]) for (const lean of [-0.25, 0.25]) { const [px, pz] = at(1.2 + lean * 3, -3.4 + v); this.mesh(p, G.post, M.wood, px, pz, { s: [0.9, 4.2, 0.9], rz: 0, rx: 0, ry: -gap }).rotation.set(0, -gap, -lean, 'YXZ'); }
+        this.mesh(p, G.wheel, M.darkWood, hx, hz, { y: 4.0, ry: -gap + Math.PI / 2 }); this.mesh(p, G.bar, M.wood, hx, hz, { y: 0.2, s: [1, 3.8, 1], shadow: false }); }
+      for (let i = 0; i < 10; i++) { const a = rand(p.seed + i * 7) * 1.6 - 0.8, r = 4 + rand(i) * 2; const [px, pz] = at(Math.cos(a) * r - 1, Math.sin(a) * r + 3.5); this.mesh(p, G.rock, M.stone, px, pz, { s: 0.35 + rand(i + 1) * 0.5, y: 0.1 }); }   // spoil
+      // rails out of the mouth and a cart
+      for (const v of [-0.45, 0.45]) { const [px, pz] = at(1.2, v); this.mesh(p, G.box, M.rail, px, pz, { s: [5.5, 0.08, 0.08], ry: -gap, shadow: false }); }
+      { const [px, pz] = at(2.4, 0); this.mesh(p, G.box, M.wood, px, pz, { y: 0.3, s: [1.3, 0.6, 1.0], ry: -gap }); for (const [du, dv] of [[-0.4, -0.5], [0.4, -0.5], [-0.4, 0.5], [0.4, 0.5]]) { const [wx, wz] = at(2.4 + du, dv); this.mesh(p, G.cartWheel, M.iron, wx, wz, { y: 0.25, ry: -gap, shadow: false }); } }
+      // a tumbledown hut
+      { const [px, pz] = at(2.5, 4.5); this.mesh(p, G.box, M.wood, px, pz, { s: [2.6, 1.4, 2.2], ry: -gap }); this.mesh(p, G.box, M.darkWood, px, pz, { y: 1.4, s: [2.9, 0.15, 2.5], ry: -gap, rz: 0.25 }); }
+      // the garrison: a tent, a fire and your banner, shown while the shaft is yours
+      { const [tx, tz] = at(4.6, -1.5); const t0 = p.tents.length; this.tent(p, tx, tz, 0, M.cloth[1], gap + Math.PI); p.held.push(...p.tents.splice(t0)); }
+      { const f0 = p.flames.length; const [fx, fz] = at(4.2, 1.8); this.fire(p, fx, fz, false); p.held.push(...p.flames.slice(f0)); }
+      { const [bx, bz] = at(0.2, 2.2); const f0 = p.flags.length; this.flag(p, bx, bz, M.ours, 0.8); p.held.push(...p.flags.slice(f0)); }
+      for (const o of p.held) o.visible = false;
     } else {   // ruined castle: broken curtain walls on a mound of rubble, a split round tower, a fallen gate arch, ivy and the hoard's chests
       this.ground(p, 12, M.path);
       const pts: [number, number][] = [];
@@ -277,7 +320,8 @@ export class Camps {
       const x = flat[i + 1], z = flat[i + 2], key = `${kind}:${Math.round(x)}:${Math.round(z)}`; seen.add(key);
       let p = this.places.get(key); if (!p) { p = this.build(kind, x, z); this.places.set(key, p); changed = true; }
       const done = flat[i + 3] > 0;
-      if (done !== p.done) {   // cleared: tents slump, flags come down, the fire dies, the loot is gone (an abbey that has healed you stays as it is)
+      if (done !== p.done && kind === 5) { p.done = done; for (const o of p.held) o.visible = done; for (const b of p.boards) b.visible = !done; }   // a shaft: yours (garrison) or abandoned (boarded up)
+      else if (done !== p.done) {   // cleared: tents slump, flags come down, the fire dies, the loot is gone (an abbey that has healed you stays as it is)
         p.done = done;
         const drop = kind !== 0;
         for (const t of p.tents) { t.scale.set(t.userData.s0, done ? t.userData.s0 * 0.3 : t.userData.s0, t.userData.s0); t.position.y = t.userData.y0 - (done ? 0.5 : 0); }
@@ -297,12 +341,57 @@ export class Camps {
     return best && { kind: best.kind, x: best.x, z: best.z, done: best.done };
   }
 
-  /** Flicker the fires and stir the flags; `t` in seconds. Places far from (x, z) are hidden. */
+  private find(x: number, z: number) { for (const p of this.places.values()) if (Math.abs(p.x - x) < 0.5 && Math.abs(p.z - z) < 0.5) return p; return null; }
+  /** An abbey lies sacked (soot, its roof on fire, its banner down) or is whole again. */
+  setSacked(x: number, z: number, on: boolean) {
+    const p = this.find(x, z); if (!p || p.sacked === on) return;
+    p.sacked = on; for (const o of p.sackFx) o.visible = on; for (const f of p.flags) f.visible = !on;
+  }
+  /** The camp a raid is setting out from (a beacon of black smoke over it), or none. */
+  setAlarm(at: { x: number; z: number } | null) { this.alarm = at ? this.find(at.x, at.z) : null; }
+
+  /** The people of the held places near the camera: outlaws round the fire, on the lookout and on patrol; monks in the cloister; your garrison at a shaft. */
+  draw(crowd: Crowd, cx: number, cz: number, view: number, t: number) {
+    for (const p of this.places.values()) {
+      if (Math.hypot(p.x - cx, p.z - cz) > view + 15) continue;
+      const add = (lx: number, lz: number, d: Partial<Draw>, yOff = 0) => { const x = p.x + lx, z = p.z + lz; crowd.add({ x, y: this.terrain.walkAt(x, z) + yOff, z, yaw: 0, pose: 0, phase: t, body: 0x3a3a3a, skin: SKINS[0], ...d } as Draw); };
+      if ((p.kind === 2 || p.kind === 3 || p.kind === 4) && !p.done) {
+        const fire = p.fires[0] ?? { x: 0, z: 0 }, n = p.kind === 2 ? 4 : 3, body = p.kind === 4 ? 0x3d4a30 : 0x3a3a3a;
+        for (let i = 0; i < n; i++) {   // round the fire, seated, now and then one gets up to swing at the air
+          const a = i / n * 6.283 + rand(p.seed + i) * 0.5, x = fire.x + Math.cos(a) * 1.9, z = fire.z + Math.sin(a) * 1.9, up = Math.sin(t * 0.3 + i * 2.1 + p.seed) > 0.85;
+          add(x, z, { yaw: Math.atan2(-Math.cos(a), -Math.sin(a)), pose: up ? 3 : 5, swing: up ? (Math.sin(t * 3 + i) + 1) / 2 * 0.6 : 0, phase: t + i, body, skin: SKINS[(p.seed + i) % 5], hat: HAT.BANDIT, tool: i % 2 ? TOOL.CLUB : TOOL.SWORD, legs: 0x2f2a26 });
+        }
+        const r = p.kind === 2 ? 7.5 : 6.5, w = t * 0.18 + p.seed, px = Math.cos(w) * r, pz = Math.sin(w) * r;   // one on patrol inside the stockade
+        add(px, pz, { yaw: Math.atan2(-Math.sin(w), Math.cos(w)) + Math.PI / 2, pose: 1, phase: t * 6, speed: 1.3, body, skin: SKINS[(p.seed + 3) % 5], hat: HAT.BANDIT, tool: TOOL.SPEAR, legs: 0x2f2a26 });
+        if (p.lookout) add(p.lookout.x, p.lookout.z, { yaw: Math.atan2(p.lookout.x, p.lookout.z) + Math.sin(t * 0.4) * 0.8, pose: 0, body, skin: SKINS[(p.seed + 1) % 5], hat: HAT.HOOD, tool: TOOL.BOW, legs: 0x2f2a26 }, 4.9);
+      } else if (p.kind === 0 && !p.sacked) {   // a monk walking the cloister garth, another at the graves
+        const w = t * 0.15 + p.seed, gx = 0;
+        const c = Math.cos(rand(p.seed + 9) * 6.283), s = Math.sin(rand(p.seed + 9) * 6.283), u = Math.cos(w) * 2.2, v = 6 + Math.sin(w) * 1.6;
+        add(c * u - s * v + gx, s * u + c * v, { yaw: Math.atan2(-Math.sin(w), Math.cos(w)) + rand(p.seed + 9) * 6.283, pose: 1, phase: t * 4, speed: 0.6, body: 0x4a3a2a, skin: SKINS[3], hat: HAT.HOOD, dress: true, legs: 0x4a3a2a });
+        const gu = -6.5, gv = -3.8; add(c * gu - s * gv, s * gu + c * gv, { yaw: rand(p.seed) * 6.283, pose: 2, phase: t, body: 0x4a3a2a, skin: SKINS[1], hat: HAT.HOOD, dress: true, tool: TOOL.HOE, legs: 0x4a3a2a });
+      } else if (p.kind === 5 && p.done) {   // your garrison: a sentry at the mouth and one by the fire
+        const fire = p.fires[0] ?? { x: 0, z: 0 };
+        add(fire.x + 1.6, fire.z, { yaw: -Math.PI / 2, pose: 5, phase: t, body: 0x2f5fa8, skin: SKINS[2], hat: HAT.KETTLE, tool: TOOL.SPEAR, legs: 0x3a3a3a });
+        const w = Math.sin(t * 0.25 + p.seed) * 2.5; add(w, 1.5, { yaw: Math.cos(t * 0.25 + p.seed) > 0 ? Math.PI / 2 : -Math.PI / 2, pose: 1, phase: t * 5, speed: 1.0, body: 0x2f5fa8, skin: SKINS[0], hat: HAT.KETTLE, tool: TOOL.SPEAR, legs: 0x3a3a3a });
+      }
+    }
+  }
+
+  /** Flicker the fires, stir the flags and let smoke rise from them; `t` in seconds. Places far from (x, z) are hidden. */
   update(t: number, x: number, z: number) {
+    const dt = this.lastT < 0 ? 0 : Math.min(0.1, Math.max(0, t - this.lastT)); this.lastT = t;
+    this.smoke.update(dt);
     for (const p of this.places.values()) {
       p.g.visible = Math.hypot(p.g.position.x - x, p.g.position.z - z) < 600;
       if (!p.g.visible) continue;
-      for (const f of p.flames) {
+      const near = Math.hypot(p.x - x, p.z - z) < 260;
+      p.smokeT -= dt;
+      if (near && p.smokeT <= 0) {   // a thin plume from every lit fire, and over the camp a raid sets out from, a thick black beacon
+        p.smokeT = 0.35;
+        for (const f of [...p.flames, ...(p.sacked ? p.sackFx.filter(o => (o as THREE.Mesh).geometry === G.flame) : [])]) if (f.visible && (f.parent?.visible ?? true)) { const wp = f.getWorldPosition(new THREE.Vector3()); this.smoke.emit(wp.x, wp.y + 1, wp.z, (Math.random() - 0.5) * 0.3, 1.0 + Math.random() * 0.5, (Math.random() - 0.5) * 0.3, 3.5, 0.6, 2.6, 0.42, 0.4, 0.38, 0.35); }
+      }
+      if (this.alarm === p && Math.random() < dt * 14) this.smoke.emit(p.x + (Math.random() - 0.5) * 2, p.g.position.y + 2, p.z + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 0.6, 3 + Math.random() * 1.5, (Math.random() - 0.5) * 0.6, 7, 2, 7, 0.1, 0.09, 0.09, 0.7);
+      for (const f of [...p.flames, ...p.sackFx.filter(o => (o as THREE.Mesh).geometry === G.flame)]) {
         const k = 0.85 + 0.15 * Math.sin(t * 9 + p.seed) + 0.1 * Math.sin(t * 23 + p.seed * 2);
         f.scale.set(k, 0.8 + 0.4 * k, k);
       }

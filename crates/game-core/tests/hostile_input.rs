@@ -56,7 +56,7 @@ fn no_command_panics_on_hostile_arguments() {
                 10 => { w.set_option(r.u(), r.b(), r.next() % 2 == 0); }
                 11 => { let n = r.u(); w.flatten(n.min(400), 5.0); }
                 12 => { w.place_batch(&r.flat()); }
-                13 => { w.visit_neutral(r.u()); }
+                13 => { w.visit_neutral(r.u()); w.wild_act(r.b(), r.u()); let _ = (w.raid_source(), w.wild_pressure(), w.neutral_info(r.f(), r.f(), r.f()), w.neutrals_flat()); }
                 14 => { w.hero_hire(); }
                 15 => { w.set_style(r.u()); }
                 16 => { w.receive_goods(r.b(), r.i()); }

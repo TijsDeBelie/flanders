@@ -4,8 +4,13 @@ export interface Release { version: string; date: string; title: string; added: 
 
 export const RELEASES: Release[] = [
   {
-    version: '0.7.2', date: '2026-11-27', title: 'Mines in the hillside and wild places you can visit',
+    version: '0.7.2', date: '2026-11-27', title: 'Mines in the hillside and a living wild',
     added: [
+      'Raids come from the camps: the bandit camps and lairs still standing near your village set how often raids come and how strong they are. Clear the camps around you and raids come up to two and a half times less often, and weaker. The warning names the camp the raiders set out from, and a column of black smoke rises over it.',
+      'Camps come back: a bandit camp you cleared stands empty for 18 days, then outlaws may move back in, stronger and richer each time. An army standing at it, a watchtower, keep or toll post within reach, or a garrisoned mineshaft nearby keeps it empty.',
+      'Abandoned mineshafts in the hills: send an army in to claim one; up to eight foot soldiers stay as a garrison and iron or gold ore comes home every day. Outlaws from camps nearby attack it now and then (less often the bigger the garrison); each attack costs half the garrison. Abandon it to bring the garrison home.',
+      'Abbeys are neighbours: after your army has met the monks you can pay them a tithe. It raises their goodwill and heals all your sick once a season; while goodwill is 40 or more their herbs heal one sick villager a day. Outlaws may sack an abbey nobody watches: it then takes no tithe for 20 days.',
+      'Life at the wild places: outlaws sit round the fire, keep watch from the lookout and patrol the stockade; monks walk the cloister and tend the graves; your garrison guards a mineshaft. Smoke rises from every fire, and a sacked abbey burns.',
       'Abbeys and ruined castles now stand on the map as buildings (they were only on the minimap): a stone church with a bell tower, a cloister and graves; a castle of broken walls and split towers on a heap of rubble with its hoard in the middle.',
       'Point at a wild place to see what it is; click it to select it. The panel tells what it holds, how strong a bandit camp is, what clearing it pays, and which of your armies is strong enough, with a Send in button for each army. An army sent in marches there and goes in by itself when it arrives. With armies selected, right-click a wild place to send them in.',
     ],
