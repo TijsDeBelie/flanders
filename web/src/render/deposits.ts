@@ -32,6 +32,8 @@ const VARIANTS = 12;
 const rockShapes = Array.from({ length: VARIANTS }, (_, v) => rockGeo(9001 + v * 37));
 const oreShape = new THREE.OctahedronGeometry(1, 0);
 const WHITE = new THREE.Color(1, 1, 1);
+/** Where a mine, quarry or clay pit stands at its deposit: its centre, the way from it into the deposit, and the deposit kind. */
+type Work = { x: number; z: number; dx: number; dz: number; kind: number };
 
 /**
  * The deposits of the map: about a thousand piles of five or six rocks with ore chips, about seven and a half thousand pieces.
@@ -104,7 +106,8 @@ export class Deposits {
   }
 
   /** Deposits that a mine, quarry or clay pit works. The pile stays at its map position. */
-  private worked = new Map<number, { key: string; decal: THREE.Mesh; tinted: THREE.Object3D[] }>();
+  private worked = new Map<number, { key: string; decal: THREE.Mesh; tinted: THREE.Object3D[]; hill: THREE.Mesh | null; buried: THREE.Object3D[]; at: Work }>();
+  private hillMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
   private decalMat = new THREE.MeshStandardMaterial({ color: 0x4a3f33, roughness: 1, transparent: true, opacity: 0.88, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 
   /** buildings_flat() (stride 10): connect every deposit that has a working building beside it. A mine's door looks away from the village, towards its deposit (see the models). */
@@ -126,17 +129,19 @@ export class Deposits {
       const key = `${w.x}:${w.z}:${w.dx.toFixed(2)}`, cur = this.worked.get(d);
       if (cur && cur.key === key) continue;
       if (cur) this.release(d);
-      const g = this.groups[d], door = 2.0;
+      const g = this.groups[d], door = 2.0, dk = this.flat[d * 5];
       const decal = new THREE.Mesh(new THREE.CircleGeometry(2.7, 20).rotateX(-Math.PI / 2), this.decalMat);
-      if (this.flat[d * 5] === 1) { decal.scale.set(1.35, 1, 0.8); decal.rotation.y = Math.atan2(w.dx, w.dz); }   // clay: a long muddy track, not a circle
-      decal.position.set(w.x + w.dx * (door + 0.4), this.terrain.heightAt(w.x + w.dx * door, w.z + w.dz * door) + 0.07, w.z + w.dz * (door + 0.4)); decal.renderOrder = 2; this.group.add(decal);
+      if (dk === 1) { decal.scale.set(1.35, 1, 0.8); decal.rotation.y = Math.atan2(w.dx, w.dz); }   // clay: a long muddy track, not a circle
+      const dd = dk === 1 ? door + 0.4 : dk === 0 ? 0 : 0.5;   // (a mine's trodden ground lies in front of its door, not inside the hill)
+      decal.position.set(w.x + w.dx * dd, this.terrain.heightAt(w.x + w.dx * dd, w.z + w.dz * dd) + 0.07, w.z + w.dz * dd); decal.renderOrder = 2; this.group.add(decal);
       const tinted: THREE.Object3D[] = [];
       for (const p of this.parts) {   // the rocks nearest the door are darker: worked, weathered
         if (p.g !== g) continue;
         const rx = g.position.x + p.rock.position.x, rz = g.position.z + p.rock.position.z;
         if (Math.hypot(rx - (w.x + w.dx * door), rz - (w.z + w.dz * door)) < 3.4) { tinted.push(p.rock); p.rock.userData.worked = true; this.shade(p.rock); }
       }
-      this.worked.set(d, { key, decal, tinted });
+      const entry = { key, decal, tinted, hill: null as THREE.Mesh | null, buried: [] as THREE.Object3D[], at: { ...w, kind: dk } };
+      this.worked.set(d, entry); this.raiseHill(d);
     }
     for (const d of [...this.worked.keys()]) if (!want.has(d)) this.release(d);
     this.flush();
@@ -146,6 +151,7 @@ export class Deposits {
     const w = this.worked.get(d); if (!w) return;
     this.group.remove(w.decal); w.decal.geometry.dispose();
     for (const rock of w.tinted) { rock.userData.worked = false; this.shade(rock); }
+    this.lowerHill(d);
     this.worked.delete(d);
   }
 
@@ -199,6 +205,74 @@ export class Deposits {
     this.flush();
   }
 
+  /** A mine or quarry works its deposit as a hillside: the pile of rocks becomes the top of a rocky hill, draped on the ground, with a sheer face where the
+   *  building stands. A mine's face is cut flush behind its door frame, so the door opens into the rock (an adit); a quarry's face is cut in three benches
+   *  of fresh pale stone above its pit. Rocks of the pile that would stand in front of the face (in the doorway or the pit) are not drawn. */
+  private raiseHill(d: number) {
+    const e = this.worked.get(d); if (!e) return;
+    this.lowerHill(d);
+    const w = e.at, kind = w.kind; if (kind === 1) return;   // a clay pit digs down, it has no face
+    const quarry = kind === 0, g = this.groups[d];
+    const nx = w.dx, nz = w.dz, tx = -nz, tz = nx;                  // n: from the building into the deposit; t: across
+    const faceD = quarry ? 3.3 : 2.05, fx = w.x + nx * faceD, fz = w.z + nz * faceD;
+    const toDep = (g.position.x - fx) * nx + (g.position.z - fz) * nz;
+    const L = Math.max(5, toDep + 4.2), W = quarry ? 5.2 : 4.6, H = quarry ? 3.7 : 4.3;
+    // rows along n: (u, height share, cliff) — two rows at the same u make a sheer wall
+    const rows: [number, number][] = quarry
+      ? [[0, -1], [0, 1 / 3], [1.0, 1 / 3], [1.0, 2 / 3], [2.0, 2 / 3], [2.0, 1], [2.8, 1]]
+      : [[0, -1], [0, 0.92], [0.7, 0.96], [1.4, 1]];
+    const top = rows[rows.length - 1][0];
+    for (let k = 1; k <= 5; k++) { const u = top + (L - top) * k / 5; rows.push([u, 0.5 + 0.5 * Math.cos(Math.PI * k / 5)]); }
+    const NV = 14, pos: number[] = [], seed = d * 31;
+    for (let r = 0; r < rows.length; r++) for (let j = 0; j <= NV; j++) {
+      const v = (j / NV * 2 - 1) * W, vv = v / W, across = Math.pow(Math.max(0, 1 - vv * vv), 0.7);
+      const [u0, share] = rows[r], back = (quarry ? 0.7 : 1.1) * vv * vv, u = back + u0 * (L - back) / L;   // the face curves back at its sides, so the hill wraps round the cut
+      const inner = r > 1 && r < rows.length - 1 && j > 0 && j < NV;
+      const jv = inner ? (rand(seed + r * 17 + j) - 0.5) * 0.5 : 0, ju = inner && r > (quarry ? 6 : 3) ? (rand(seed + r * 5 + j * 3) - 0.5) * 0.6 : 0;
+      const px = fx + nx * (u + ju) + tx * (v + jv), pz = fz + nz * (u + ju) + tz * (v + jv), ground = this.terrain.heightAt(px, pz);
+      const h = share < 0 ? -0.35 : H * share * across + (r === rows.length - 1 || j === 0 || j === NV ? -0.35 : inner ? (rand(seed + r * 7 + j * 11) - 0.5) * 0.5 : 0);
+      pos.push(px, ground + Math.max(-0.35, h), pz);
+    }
+    const idx: number[] = [], cols = NV + 1;
+    for (let r = 0; r + 1 < rows.length; r++) for (let j = 0; j < NV; j++) { const a = r * cols + j, b = a + 1, c = a + cols, dd = c + 1; idx.push(a, b, c, b, dd, c); }
+    let geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx);
+    geo = geo.toNonIndexed(); geo.computeVertexNormals();
+    // colours by facing: sheer faces are bare rock (fresh pale stone in a quarry, streaked with ore in a mine), gentle tops carry turf
+    const N = geo.attributes.normal, P = geo.attributes.position, col = new Float32Array(P.count * 3), c = new THREE.Color();
+    const rock = new THREE.Color(quarry ? 0x9b978f : kind === 3 ? 0x8a857d : 0x746c65), cut = new THREE.Color(quarry ? 0xc4baa2 : kind === 3 ? 0x8a8378 : 0x766c63);
+    const turf = new THREE.Color(0x5d7436), ore = new THREE.Color(kind === 3 ? 0xc9a02c : 0x8e4a2b), bench = new THREE.Color(0xa8a090);
+    for (let f = 0; f < P.count; f += 3) {
+      const ny = N.getY(f), r = rand(seed + f * 0.37), hAbove = (P.getY(f) + P.getY(f + 1) + P.getY(f + 2)) / 3 - this.terrain.heightAt(P.getX(f), P.getZ(f));
+      if (ny < 0.55) { c.copy(cut); if (!quarry && r < 0.16) c.lerp(ore, 0.75); }
+      else if (quarry && ny > 0.9 && hAbove < H * 0.9) c.copy(bench);
+      else if (ny > 0.8 && hAbove > 0.6) c.copy(turf).lerp(rock, r * 0.35);
+      else c.copy(rock).lerp(turf, r * 0.3);
+      c.multiplyScalar(0.92 + r * 0.16);
+      for (let k = 0; k < 3; k++) col.set([c.r, c.g, c.b], (f + k) * 3);
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const hill = new THREE.Mesh(geo, this.hillMat); hill.castShadow = hill.receiveShadow = true; hill.matrixAutoUpdate = false;
+    this.group.add(hill); e.hill = hill;
+    // rocks of the pile standing in front of the face, in the doorway or the pit, are left out
+    const sc = g.scale.x;
+    for (const p of this.parts) {
+      if (p.g !== g) continue;
+      const rx = g.position.x + p.rock.position.x * sc - fx, rz = g.position.z + p.rock.position.z * sc - fz, rr = p.rock.scale.x * sc;
+      const u = rx * nx + rz * nz, v = Math.abs(rx * tx + rz * tz);
+      if (u - rr * 0.6 < (quarry ? 1.2 : 0.5) && v < W * 0.8) { e.buried.push(p.rock); p.rock.visible = false; for (const o of p.ore) o.o.visible = false; }
+    }
+    this.stamp(g);
+  }
+  private lowerHill(d: number) {
+    const e = this.worked.get(d); if (!e) return;
+    if (e.hill) { this.group.remove(e.hill); e.hill.geometry.dispose(); e.hill = null; }
+    if (e.buried.length) {
+      const g = this.groups[d];
+      for (const p of this.parts) if (e.buried.includes(p.rock)) { p.rock.visible = true; for (const o of p.ore) o.o.visible = !g.userData.dormant; }
+      e.buried = []; this.stamp(g);
+    }
+  }
+
   /** Sit every deposit on the ground as it is now (villages level the ground, rivers and earthworks change it); one under water is hidden. */
   refit() {
     for (let i = 0; i < this.groups.length; i++) {
@@ -211,6 +285,7 @@ export class Deposits {
       p.rock.position.y = ground - p.g.position.y + p.lift - 0.2;
       for (const c of p.ore) c.o.position.y = p.rock.position.y + c.dy;
     }
+    for (const d of this.worked.keys()) this.raiseHill(d);   // the hills follow the ground too
     for (const g of this.groups) this.stamp(g);
     this.flush();
   }

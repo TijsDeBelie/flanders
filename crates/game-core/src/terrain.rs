@@ -313,6 +313,35 @@ pub fn neutrals(seed: u64) -> Vec<(u8, f32, f32)> {
     })
 }
 
+/// Abandoned mineshafts out in the wild: (ore, x, y) with ore 0 iron, 1 gold. A list of their own (the neutral places keep their indices):
+/// on a coarser grid, on dry, gentle land well away from every village and from the other wild places.
+pub fn mineshafts(seed: u64) -> Vec<(u8, f32, f32)> {
+    thread_local! { static M: std::cell::RefCell<Vec<(u64, Vec<(u8, f32, f32)>)>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    M.with(|c| {
+        if let Some((_, v)) = c.borrow().iter().find(|(s, _)| *s == seed) { return v.clone(); }
+        let v = mineshafts_uncached(seed);
+        let mut b = c.borrow_mut(); if b.len() > 8 { b.remove(0); } b.push((seed, v.clone()));
+        v
+    })
+}
+
+fn mineshafts_uncached(seed: u64) -> Vec<(u8, f32, f32)> {
+    let s = sites(seed); let places = neutrals(seed); let mut out: Vec<(u8, f32, f32)> = vec![];
+    let n = (HALF / 260.0) as i32;
+    for cy in -n..n { for cx in -n..n {
+        if h01(seed ^ 0x6A, cx, cy) > 0.45 { continue; }
+        let x = (cx as f32 + 0.2 + 0.6 * h01(seed ^ 0x6B, cx, cy)) * 260.0;
+        let y = (cy as f32 + 0.2 + 0.6 * h01(seed ^ 0x6C, cx, cy)) * 260.0;
+        if x.abs() > HALF - 90.0 || y.abs() > HALF - 90.0 { continue; }
+        let h = land_sample::<false>(seed, &s, x, y, false).0;
+        if h < 2.5 || h > 40.0 || placement_slope(seed, &s, x, y) > 0.5 { continue; }
+        if site_dist(&s, x, y) < 150.0 { continue; }
+        if places.iter().any(|p| (p.1 - x).hypot(p.2 - y) < 45.0) || out.iter().any(|p| (p.1 - x).hypot(p.2 - y) < 120.0) { continue; }
+        out.push((if h01(seed ^ 0x6D, cx, cy) < 0.7 { 0 } else { 1 }, x, y));
+    } }
+    out
+}
+
 fn neutrals_uncached(seed: u64) -> Vec<(u8, f32, f32)> {
     let s = sites(seed); let mut out = vec![];
     let n = (HALF / 160.0) as i32;

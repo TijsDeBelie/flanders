@@ -4,6 +4,25 @@ export interface Release { version: string; date: string; title: string; added: 
 
 export const RELEASES: Release[] = [
   {
+    version: '0.7.2', date: '2026-11-27', title: 'Mines in the hillside and a living wild',
+    added: [
+      'Raids come from the camps: the bandit camps and lairs still standing near your village set how often raids come and how strong they are. Clear the camps around you and raids come up to two and a half times less often, and weaker. The warning names the camp the raiders set out from, and a column of black smoke rises over it.',
+      'Camps come back: a bandit camp you cleared stands empty for 18 days, then outlaws may move back in, stronger and richer each time. An army standing at it, a watchtower, keep or toll post within reach, or a garrisoned mineshaft nearby keeps it empty.',
+      'Abandoned mineshafts in the hills: send an army in to claim one; up to eight foot soldiers stay as a garrison and dig iron or gold ore. With a road from your castle to the shaft (the panel lays one for you along the dry way) everything dug comes home every day; without one a slow mule train carries a small load at a time and most of the ore waits at the mouth. The garrison eats from your stores like every soldier and deserts, one a day, when the food runs out. Outlaws from camps nearby attack it now and then (less often the bigger the garrison); each attack costs half the garrison and half the ore waiting. Abandon it to bring the garrison home.',
+      'The computer villages use the wild places too: they meet the monks and pay tithes, loot ruins, hold mineshafts and lay roads to them, and clear camps they are strong enough for.',
+      'Abbeys are neighbours: after your army has met the monks you can pay them a tithe. It raises their goodwill and heals all your sick once a season; while goodwill is 40 or more their herbs heal one sick villager a day. Outlaws may sack an abbey nobody watches: it then takes no tithe for 20 days.',
+      'Life at the wild places: outlaws sit round the fire, keep watch from the lookout and patrol the stockade; monks walk the cloister and tend the graves; your garrison guards a mineshaft. Smoke rises from every fire, and a sacked abbey burns.',
+      'Abbeys and ruined castles now stand on the map as buildings (they were only on the minimap): a stone church with a bell tower, a cloister and graves; a castle of broken walls and split towers on a heap of rubble with its hoard in the middle.',
+      'Point at a wild place to see what it is; click it to select it. The panel tells what it holds, how strong a bandit camp is, what clearing it pays, and which of your armies is strong enough, with a Send in button for each army. An army sent in marches there and goes in by itself when it arrives. With armies selected, right-click a wild place to send them in.',
+    ],
+    changed: [
+      'Bandit camps are redesigned: a stockade of sharpened stakes with a skull-topped gate, ridge tents with their doors to the fire, the chief\'s round tent and banner, a cooking spit, benches, a lookout tower, a weapon rack, a prisoner cage and the loot pile. Once cleared the tents slump, the fire dies and the loot is gone.',
+      'Mines are cut into the deposit: a rocky hill rises over the ore, its face cut sheer behind the door frame, so the door opens into the rock. Quarries cut three benches of pale fresh stone into their deposit above the pit. Rocks no longer stand in the doorway.',
+      'Trees no longer grow through the abbeys, ruins and camps you have found.',
+    ],
+    fixed: [],
+  },
+  {
     version: '0.7.1', date: '2026-11-25', title: 'Better house designs',
     added: [
       'House designs are rebuilt to fit each house: a second chimney on the ridge, flower boxes under the windows and pots at the door, a lean-to woodshed with a log stack, a dovecote on the ridge, a loft dormer growing out of the roof, a raised kitchen garden behind the house, a carved gable end with bargeboards and a sunburst, and a cellar hatch with stone cheeks. Textured soil, leaves, bark and straw.',

@@ -142,6 +142,11 @@ export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; ton
     case 10: return { text: `A new ${UNIT_NAMES[a] ?? 'soldier'} finished training.`, tone: 'good' };
     case 25: return b === 2 ? { text: `${bossTitle(bosses, a >> 4, a & 15)}, has pitched a plague camp outside the village and the sickness will not die down. Send a fast raid to kill him.`, tone: 'bad' } : { text: `${bossTitle(bosses, a >> 4, a & 15)}, has fallen!`, tone: 'good' };
     case 26: return { text: 'Your army goes into a lair.', tone: 'info' };
+    case 29: return a === 1 ? { text: 'Outlaws have moved back into a bandit camp you cleared. It is stronger now.', tone: 'bad' }
+      : a === 2 ? { text: 'Outlaws have sacked an abbey. The monks can take no tithe and send no herbs for a while.', tone: 'bad' }
+      : a === 3 ? { text: 'Outlaws attacked your mineshaft: half its garrison fell.', tone: 'bad' }
+      : a === 4 ? { text: 'Outlaws took your mineshaft: its garrison is dead.', tone: 'bad' }
+      : { text: `The monks heal your sick${b > 0 ? ` (${b})` : ''} for your tithe.`, tone: 'good' };
     default: return { text: 'Something happened.', tone: 'info' };
   }
 };

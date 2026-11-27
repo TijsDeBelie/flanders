@@ -52,6 +52,7 @@ mod route_height_tests;
 mod snapshot_tests;
 mod siege;
 mod terrain;
+mod wilds;
 use catalog::*;
 use military::*;
 use terrain::{lerp, smoothstep, Deposit};
@@ -187,6 +188,7 @@ const EV_CHOICE: i32 = 18;
 pub const FOG_N: i32 = 60;
 pub const FOG_CELL: f32 = 40.0;
 const EV_VISIT: i32 = 20;
+const EV_WILD: i32 = 29;   // a wild place changed: a = what (see wilds::WILD_*), b = the place
 const EV_HERO: i32 = 21;
 const EV_MIASMA: i32 = 22;
 const EV_SERVICE: i32 = 23;
@@ -421,9 +423,11 @@ pub struct World {
     #[serde(skip)] vets: [u32; NK],       // veterans among the standing army, by kind (they came through a battle: see tactics::is_veteran); saved with the extras of snapshot layout 9
     #[serde(skip)] train_acc: [u32; NK],  // drill progress of each kind in the queue (the barracks train every queued kind at once)
     #[serde(skip)] last_battle_frame: Vec<f32>,
+    #[serde(skip)] wilds: wilds::Wilds,   // camps that come back, abbeys, mineshafts (see wilds.rs): saved in snapshot layout E, part of the state hash
 }
 
 /// Start of every world snapshot: a name and the layout version. Bump the version when a field of the world is added, removed or changes type (a snapshot of another layout is refused).
+const WILDS_SNAP_MAGIC: &[u8; 8] = b"FLWORLDE";
 const RALLY_SNAP_MAGIC: &[u8; 8] = b"FLWORLDD";
 const GUESTS_SNAP_MAGIC: &[u8; 8] = b"FLWORLDC";
 const SNAP_MAGIC: &[u8; 8] = b"FLWORLDB";
@@ -443,6 +447,7 @@ pub fn world_restore(bytes: &[u8]) -> Option<World> {
     let (magic, payload) = bytes.split_at_checked(8)?;
     if magic == LEGACY_SNAP_MAGIC {
         let mut w: World = bincode::deserialize(payload).ok()?;
+        w.wilds = wilds::Wilds::new(w.seed);
         w.ledger.ensure_kinds(DEFS.len());
         w.moat_water = w.compute_moat_water();
         return Some(w);
@@ -452,13 +457,14 @@ pub fn world_restore(bytes: &[u8]) -> Option<World> {
     let mut camp: Option<plague::Camp> = None;
     let mut allies: Vec<i32> = vec![];
     let mut rally: [Option<(f32, f32)>; 2] = [None; 2];
-    let (mut w, marches) = if magic == RALLY_SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == SNAP_MAGIC || magic == SIEGE_SNAP_MAGIC || magic == EXTRAS_SNAP_MAGIC || magic == VETS_SNAP_MAGIC || magic == TOOLS_SNAP_MAGIC || magic == ESTATE_SNAP_MAGIC || magic == OBJECTIVE_SNAP_MAGIC || magic == TACTICS_SNAP_MAGIC {
+    let mut wilds: Option<wilds::Wilds> = None;
+    let (mut w, marches) = if magic == WILDS_SNAP_MAGIC || magic == RALLY_SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == SNAP_MAGIC || magic == SIEGE_SNAP_MAGIC || magic == EXTRAS_SNAP_MAGIC || magic == VETS_SNAP_MAGIC || magic == TOOLS_SNAP_MAGIC || magic == ESTATE_SNAP_MAGIC || magic == OBJECTIVE_SNAP_MAGIC || magic == TACTICS_SNAP_MAGIC {
         type TacticalState = (World, Vec<march::SavedMarch>, u16, bool, Option<tactics::Tactics>);
         type ObjectiveState = (TacticalState, Option<raid_objective::RaidObjective>);
         let (((state, estate), tools), planted): (((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>) =
-            if magic == SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == RALLY_SNAP_MAGIC {
+            if magic == SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == RALLY_SNAP_MAGIC || magic == WILDS_SNAP_MAGIC {
                 type Body = (((((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>), ([u32; NK], [u32; NK])), (Option<siege::Siege>, Option<plague::Camp>));
-                let ((inner, ex), (sg, cp)): Body = if magic == RALLY_SNAP_MAGIC { let ((body, a), r): ((Body, Vec<i32>), [Option<(f32, f32)>; 2]) = bincode::deserialize(payload).ok()?; allies = a; rally = r; body } else if magic == GUESTS_SNAP_MAGIC { let (body, a): (Body, Vec<i32>) = bincode::deserialize(payload).ok()?; allies = a; body } else { bincode::deserialize(payload).ok()? };
+                let ((inner, ex), (sg, cp)): Body = if magic == WILDS_SNAP_MAGIC { let (((body, a), r), wl): (((Body, Vec<i32>), [Option<(f32, f32)>; 2]), wilds::Wilds) = bincode::deserialize(payload).ok()?; allies = a; rally = r; wilds = Some(wl); body } else if magic == RALLY_SNAP_MAGIC { let ((body, a), r): ((Body, Vec<i32>), [Option<(f32, f32)>; 2]) = bincode::deserialize(payload).ok()?; allies = a; rally = r; body } else if magic == GUESTS_SNAP_MAGIC { let (body, a): (Body, Vec<i32>) = bincode::deserialize(payload).ok()?; allies = a; body } else { bincode::deserialize(payload).ok()? };
                 extras = ex; siege = Some(sg); camp = cp; inner }
             else if magic == SIEGE_SNAP_MAGIC { let ((inner, ex), sg): (((((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>), ([u32; NK], [u32; NK])), Option<siege::Siege>) = bincode::deserialize(payload).ok()?; extras = ex; siege = Some(sg); inner }
             else if magic == EXTRAS_SNAP_MAGIC { let (inner, ex): ((((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>), ([u32; NK], [u32; NK])) = bincode::deserialize(payload).ok()?; extras = ex; inner }
@@ -504,6 +510,7 @@ pub fn world_restore(bytes: &[u8]) -> Option<World> {
     if rally.iter().flatten().any(|r| !r.0.is_finite() || !r.1.is_finite() || r.0.abs() > MAP_LIMIT || r.1.abs() > MAP_LIMIT) { return None; }
     w.rally = rally;
     if !allies.is_empty() { if allies.len() != w.dets.len() { return None; } for (det, a) in w.dets.iter_mut().zip(allies) { det.ally = a; } }
+    match wilds { Some(wl) => { if !wl.valid(w.seed) { return None; } w.wilds = wl; } None => w.wilds = wilds::Wilds::new(w.seed) }   // (a village saved before the wild places came to life starts them fresh)
     w.ledger.ensure_kinds(DEFS.len());
     Some(w)
 }
@@ -630,13 +637,13 @@ fn demolition_refund(kind: u8) -> impl Iterator<Item = Amount> {
 impl World {
     /// The whole state of the village as bytes (the caches are not in it: they are rebuilt on demand). `world_restore` turns it back into the same world, to the last bit.
     pub fn snapshot(&self) -> Vec<u8> {
-        let mut v = RALLY_SNAP_MAGIC.to_vec();
+        let mut v = WILDS_SNAP_MAGIC.to_vec();
         let marches: Vec<_> = self.dets.iter().map(march::Det::save_march).collect();
         let battle = self.battle.as_ref();
         let tactical_state = (self, marches, self.military_tech, self.auto_bridge, battle.map(|b| &b.tactics));
         let objective_state = (tactical_state, battle.and_then(|b| b.objective));
         let allies: Vec<i32> = self.dets.iter().map(|d| d.ally).collect();   // (whose soldiers each field army is: 0 ours; see `host_guests`)
-        v.extend(bincode::serialize(&(((((((objective_state, self.estate), self.emergency_tools), &self.planted), (self.vets, self.train_acc)), (battle.map(|b| &b.siege), self.plague_camp)), allies), self.rally)).expect("a world can be written"));
+        v.extend(bincode::serialize(&((((((((objective_state, self.estate), self.emergency_tools), &self.planted), (self.vets, self.train_acc)), (battle.map(|b| &b.siege), self.plague_camp)), allies), self.rally), &self.wilds)).expect("a world can be written"));
         v
     }
 
@@ -645,7 +652,7 @@ impl World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
             buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, born: 0, arrived: 0, enlisted: 0, left: 0, died: [0; 5], unburied: 0, buried: 0, graves_used: 0, devotion: 0, relations: vec![], married: vec![], last_envoy: vec![], market_sold: [0; market::MARKET_GOODS.len()], style: 0, hero: None, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, plague_start: 0, plague_end: 0, plague_camp: None, share_until: 0, caravans: vec![], journeys: vec![], arrivals: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, cold_days: 0, eff: 100, eff_first: 100, eff_rest: 100, jobs: 0,
-            events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], meal_credit: 0, emergency_tools: [0; 2], estate: estate::Estate { active: true, ..Default::default() }, ledger: ledger::Ledger::new(DEFS.len()), levels: vec![], flats: vec![], roads: vec![], road_links: vec![], road_tier: vec![], road_conn: vec![], military_tech: 0, auto_bridge: false, rally: [None; 2], vets: [0; NK], train_acc: [0; NK], last_battle_frame: vec![],
+            events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], meal_credit: 0, emergency_tools: [0; 2], estate: estate::Estate { active: true, ..Default::default() }, ledger: ledger::Ledger::new(DEFS.len()), levels: vec![], flats: vec![], roads: vec![], road_links: vec![], road_tier: vec![], road_conn: vec![], military_tech: 0, auto_bridge: false, rally: [None; 2], vets: [0; NK], train_acc: [0; NK], last_battle_frame: vec![], wilds: wilds::Wilds::default(),
             army: [0; NK], queue: [0; NK], train_prog: 0, away: [0; NK], battle: None, raid_warning_ticks: 0, raid_warning_angle: 0.0, raid_warning_rf: 0.0, raid_warning_boss: false, raid_warning_name: 0, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, report_bought: false, greed: 0, dets: vec![], next_det: 0, felled: vec![], planted: vec![], groves: vec![], ov_cache: Default::default(), march_heights: Default::default(), march_routes: Default::default(), mem_cache: Default::default(), deposit_layout: Default::default(), links: vec![], moat_water: vec![], bridges: vec![], db_want: vec![], map_ver: 0, road_sig: 0, net_base: Default::default(), link_stamp: Default::default(), ground_cache: Default::default(), height_cache: Default::default(),
         };
         w.stock[W as usize] = 160;
@@ -658,6 +665,7 @@ impl World {
         let pad_h = w.base(x, y);
         w.buildings.push(Building { kind: TOWN_HALL, tier: 0, x, y, rot: 0, pad_h, progress: 0, status: 4, aux: -1, staff: 0, residents: 0, hp: battle::max_hp(TOWN_HALL, 0), burning: 0.0, garrison: 0, born: 0, opts: 0, fert: FERT_MAX, mode: 0, target: -1, beff: 100 });
         w.neutral_done = vec![false; terrain::neutrals(seed).len()];
+        w.wilds = wilds::Wilds::new(seed);
         w.reveal(x, y, 110.0);
         w.after_change();
         w
@@ -713,6 +721,7 @@ impl World {
         live.sort_by(|a, b| a.0.total_cmp(&b.0));
         let k = self.rng.range(live.len().min(3) as u32) as usize;
         let (_, x, y) = live[k];
+        self.wilds.raid_from = terrain::neutrals(self.seed).iter().position(|n| n.1 == x && n.2 == y).map_or(-1, |i| i as i32);
         Some((y - oy).atan2(x - ox))
     }
     /// Raiders can only be seen coming if a watchtower (tower or keep) stands: otherwise there is no warning, they are simply noticed when they reach the fields.
@@ -723,11 +732,59 @@ impl World {
         let camps: Vec<usize> = list.iter().enumerate().filter(|(_, n)| n.0 >= 2).map(|(i, _)| i).collect();
         !camps.is_empty() && camps.iter().all(|&i| self.neutral_done.get(i).copied().unwrap_or(false))
     }
-    /// Neutral places you know about: [kind, x, y, done] each (kind 0 abbey, 1 ruined castle, 2 bandit camp, 3 lair). Unseen places are left out.
+    /// Neutral places you know about: [kind, x, y, done] each (kind 0 abbey, 1 ruined castle, 2 bandit camp, 3 lair, 4 the plague doctor's camp, 5 abandoned mineshaft:
+    /// done there means you hold it). Unseen places are left out.
     pub fn neutrals_flat(&self) -> Vec<f32> {
         let mut v: Vec<f32> = terrain::neutrals(self.seed).iter().enumerate().filter(|(_, n)| self.is_seen(n.1, n.2)).flat_map(|(i, n)| [n.0 as f32, n.1, n.2, self.neutral_done.get(i).copied().unwrap_or(false) as u8 as f32]).collect();
         if let Some(c) = self.plague_camp { v.extend([4.0, c.x, c.y, 0.0]); }   // the plague camp (kind 4) is always known
+        for (j, m) in terrain::mineshafts(self.seed).iter().enumerate() { if self.is_seen(m.1, m.2) { v.extend([5.0, m.1, m.2, self.shaft_held(j) as u8 as f32]); } }
         v
+    }
+    fn shaft_held(&self, j: usize) -> bool { self.wilds.shafts.get(j).is_some_and(|s| s.garrison.iter().sum::<u32>() > 0) }
+    /// The known neutral place nearest (x, y) within `r`: [kind, x, y, done, strength needed (0 when none or unknown), gold, iron, h, index, a, b, c, road, pile, cart, cart days], or empty.
+    /// Kind 4 is the plague doctor's camp, 5 an abandoned mineshaft (index into the shafts; done: you hold it). What a camp pays is what `visit_neutral` would give now.
+    /// a, b, c: abbey goodwill, days to the next healing a tithe buys, days it lies sacked; camp: times it has come back, days before outlaws may return (cleared), 1 if watched;
+    /// shaft: soldiers in its garrison, ore a day, the ore (resource number), and for the chance of an attack a day in percent see `h`. Then four more, for a shaft only (0 otherwise):
+    /// 1 if a road joins it to the castle, ore waiting at its mouth, ore on the road by mule train, days before that train arrives.
+    pub fn neutral_info(&self, x: f32, y: f32, r: f32) -> Vec<f32> {
+        let mut best: Option<(f32, Vec<f32>)> = None;
+        let days = |t: u64| (t.saturating_sub(self.tick) as f32 / DAY as f32).ceil();
+        for (i, &(kind, nx, ny)) in terrain::neutrals(self.seed).iter().enumerate() {
+            let d = (nx - x).hypot(ny - y);
+            if d > r || !self.is_seen(nx, ny) || best.as_ref().is_some_and(|b| b.0 <= d) { continue; }
+            let h = terrain::h01(self.seed ^ 0x52, i as i32, 3);
+            let done = self.neutral_done.get(i).copied().unwrap_or(false);
+            let p = self.wilds.places.get(i).copied().unwrap_or_default();
+            let (need, gold, iron) = match kind {
+                1 => (0.0, (80.0 * (0.6 + h)).round(), (20.0 * (0.6 + h)).round()),
+                2 => { let (need, g, ir) = self.camp_terms(i); (need, g as f32, ir as f32) }
+                _ => (0.0, 0.0, 0.0),
+            };
+            let (a, b, c) = match kind {
+                0 => (p.goodwill as f32, days(p.next_heal), days(p.sacked_until)),
+                2 => (p.rounds as f32, if done && p.cleared_at > 0 { days(p.cleared_at + wilds::REOCCUPY_DAYS * DAY) } else { 0.0 }, self.watched_place(nx, ny) as u8 as f32),
+                _ => (0.0, 0.0, 0.0),
+            };
+            best = Some((d, vec![kind as f32, nx, ny, done as u8 as f32, need, gold, iron, h, i as f32, a, b, c, 0.0, 0.0, 0.0, 0.0]));
+        }
+        if let Some(c) = self.plague_camp { let d = (c.x - x).hypot(c.y - y); if d <= r && best.as_ref().map_or(true, |b| d < b.0) { best = Some((d, vec![4.0, c.x, c.y, 0.0, 0.0, 0.0, 0.0, 0.5, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])); } }
+        for (j, &(ore, mx, my)) in terrain::mineshafts(self.seed).iter().enumerate() {
+            let d = (mx - x).hypot(my - y);
+            if d > r || !self.is_seen(mx, my) || best.as_ref().is_some_and(|b| b.0 <= d) { continue; }
+            let held: u32 = self.wilds.shafts.get(j).map_or(0, |s| s.garrison.iter().sum());
+            let near = self.nearest_outlaws(mx, my);
+            let risk = if near < wilds::OUTLAW_REACH { World::shaft_attack_chance(near, held.max(wilds::GARRISON_MIN)) * 100.0 } else { 0.0 };
+            let (res, n) = if ore == 0 { (IO, wilds::SHAFT_IRON) } else { (GO, wilds::SHAFT_GOLD) };
+            let sh = self.wilds.shafts.get(j).copied().unwrap_or_default();
+            let cart_days = if sh.cart_due > 0 { days(sh.cart_due) } else { 0.0 };
+            best = Some((d, vec![5.0, mx, my, (held > 0) as u8 as f32, 0.0, 0.0, 0.0, risk, j as f32, held as f32, n as f32, res as f32,
+                self.shaft_road(mx, my) as u8 as f32, sh.pile as f32, sh.cart as f32, cart_days]));
+        }
+        best.map(|b| b.1).unwrap_or_default()
+    }
+    /// A field army's strength as a bandit camp measures it (the same sum `visit_neutral` compares with the camp's), 0 when there is no such army.
+    pub fn det_power(&self, id: u32) -> f32 {
+        self.dets.iter().find(|d| d.id == id).map_or(0.0, |d| (0..NK).map(|k| d.units[k] as f32 * UNITS[k].hp * UNITS[k].dmg / UNITS[k].cd.max(0.5)).sum())
     }
     /// What a cleared bandit camp pays: 120 gold and 15 iron, times a share for the camp's own strength (`h` 0..1: 0.7 for the weakest, 1.5 for the strongest, the same `h` that sets its power check)
     /// and a share for the village's progress (1.0 for a young village up to 2.0 for a grown one: the same measure as a boss's, see `boss_scale`).
@@ -737,7 +794,7 @@ impl World {
         ((120.0 * m).round() as i32, (15.0 * m).round() as i32)
     }
     /// Send a field army (that has stopped near one) into a neutral place. Abbey: the sick are healed and spirits rise. Ruined castle: its hoard is carried off. Bandit camp: a fight,
-    /// won by strength, whose loser is the army (half of it falls) or the camp (cleared, its coin taken). Lair (kind 3): a real battle starts on the spot (3 is returned at once; the fight, its report and the reward come as for a raid). Returns the kind (0..3) on success, -1 no such army, -2 nothing close enough, -3 already visited, -4 a fight is already on.
+    /// won by strength, whose loser is the army (half of it falls) or the camp (cleared, its coin taken). Lair (kind 3): a real battle starts on the spot (3 is returned at once; the fight, its report and the reward come as for a raid). Returns the kind (0..3) on success, 5 a mineshaft claimed (see wilds.rs), -1 no such army, -2 nothing close enough, -3 already visited (or the shaft is already held), -4 a fight is already on, -5 too few soldiers to garrison a shaft, -7 the abbey has been sacked.
     pub fn visit_neutral(&mut self, army_id: u32) -> i32 {
         if self.battle.is_some() && self.dets.iter().any(|d| d.id == army_id) { return -4; }   // a fight is on
         let Some(di) = self.dets.iter().position(|d| d.id == army_id) else { return -1 };
@@ -747,20 +804,29 @@ impl World {
             return if self.begin_lair_battle(di, CAMP_LAIR, c.x, c.y, 0.5, DOCTOR) { 4 } else { -4 };
         }
         let list = terrain::neutrals(self.seed);
-        let Some((ni, &(kind, nx, ny))) = list.iter().enumerate().filter(|(_, n)| ((n.1 - ax).powi(2) + (n.2 - ay).powi(2)).sqrt() < 14.0).next() else { return -2 };
+        let Some((ni, &(kind, nx, ny))) = list.iter().enumerate().filter(|(_, n)| ((n.1 - ax).powi(2) + (n.2 - ay).powi(2)).sqrt() < 14.0).next() else {
+            // an abandoned mineshaft: the army claims it and leaves a garrison (see wilds.rs)
+            let Some(j) = terrain::mineshafts(self.seed).iter().position(|m| (m.1 - ax).hypot(m.2 - ay) < 14.0) else { return -2 };
+            if self.dets[di].state == march::S_FIGHT { return -4; }
+            let (mx, my) = (terrain::mineshafts(self.seed)[j].1, terrain::mineshafts(self.seed)[j].2);
+            let code = self.claim_shaft(di, j);
+            if code == 5 { self.reveal(mx, my, 80.0); self.push_event(EV_VISIT, 5, 0); }
+            return code;
+        };
         if self.neutral_done.get(ni).copied().unwrap_or(true) { return -3; }
+        if kind == 0 && self.tick < self.wilds.places.get(ni).map_or(0, |p| p.sacked_until) { return -7; }   // sacked by outlaws: the monks have nothing to give for now
         let cap = self.storage_cap(); let h = terrain::h01(self.seed ^ 0x52, ni as i32, 3);
         if kind == 3 {   // a lair: a real fight, won or lost on the field (see begin_lair_battle); not done until the boss is dead
             if self.dets[di].state == march::S_FIGHT { return -4; }
             return if self.begin_lair_battle(di, ni as i32, nx, ny, h, LAIR_BOSS) { 3 } else { -4 };
         }
         match kind {
-            0 => { self.end_plague(); self.mood = 12; self.mood_until = self.tick + 15 * DAY; }
+            0 => { self.end_plague(); self.mood = 12; self.mood_until = self.tick + 15 * DAY; self.wilds.fit(self.seed); let p = &mut self.wilds.places[ni]; p.goodwill = p.goodwill.max(50); p.next_heal = self.tick + wilds::TITHE_SEASON_DAYS * DAY; }   // the monks are friends now: see wilds.rs for tithes
             1 => { for (r, base) in [(ST, 120), (IR, 20), (GD, 80), (PL, 60)] { let n = (base as f32 * (0.6 + h)) as i32; self.stock[r as usize] = Self::add_capped(self.stock[r as usize], n, cap); } }
             _ => {
                 let power: f32 = (0..NK).map(|k| units[k] as f32 * UNITS[k].hp * UNITS[k].dmg / UNITS[k].cd.max(0.5)).sum();
-                let camp = 9000.0 + 14000.0 * h;
-                if power >= camp { let (gold, iron) = Self::camp_loot(h, self.population, self.tick); self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], gold, cap); self.stock[IR as usize] = Self::add_capped(self.stock[IR as usize], iron, cap); }
+                let (camp, gold, iron) = self.camp_terms(ni);   // (stronger and richer each time outlaws have come back)
+                if power >= camp { self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], gold, cap); self.stock[IR as usize] = Self::add_capped(self.stock[IR as usize], iron, cap); self.wilds.fit(self.seed); self.wilds.places[ni].cleared_at = self.tick.max(1); }
                 else { self.dets[di].grp.clear(); for k in 0..NK { self.dets[di].units[k] /= 2; } if self.dets[di].units.iter().all(|&u| u == 0) { self.dets.remove(di); } return kind as i32 + 100; }   // beaten: not marked done, it can be tried again
             }
         }
@@ -938,7 +1004,7 @@ impl World {
     /// Whole meals in the stores.
     pub(crate) fn food(&self) -> i32 { (self.food_units() / self.meal_units() as i64).min(i32::MAX as i64) as i32 }
     fn appetite(&self) -> (u32, i32) {
-        let soldiers = self.army.iter().chain(&self.away).chain(self.dets.iter().flat_map(|d| &d.units)).copied().sum::<u32>();
+        let soldiers = self.army.iter().chain(&self.away).chain(self.dets.iter().flat_map(|d| &d.units)).copied().sum::<u32>() + self.garrisoned();   // (the garrisons of the mineshafts eat too)
         let heads = (self.population + soldiers) as i32;
         let units = if self.estate.active { heads * 2 } else { (heads + 5) / 10 * 4 };
         (soldiers, units)
@@ -2025,6 +2091,7 @@ impl World {
 
         // disease (an outbreak runs for many days: see plague.rs)
         self.plague_step();
+        self.wilds_step();
 
         // random events
         if self.rng.range(200) == 0 {
@@ -2045,10 +2112,11 @@ impl World {
                     if self.begin_battle(force, self.raid_warning_angle, 0) { self.battle.as_mut().unwrap().objective = objective; }
                 }
             }
-        } else if self.tick > RAID_FROM_TICK && self.battle.is_none() && self.rng.range(self.raid_one_in()) == 0 {
+        } else if self.tick > RAID_FROM_TICK && self.battle.is_none() && self.rng.range(self.raid_one_in_wild()) == 0 {   // (fewer raids when few camps stand near: see wilds.rs)
             self.raid_warning_angle = self.rng.range(628) as f32 * 0.01;
+            self.wilds.raid_from = -1;
             if let Some(a) = self.raid_camp_angle() { self.raid_warning_angle = a; }   // raiders come from a camp that still stands, if there is one
-            self.raid_warning_rf = self.rng.range(1000) as f32 / 1000.0;
+            let rf = self.rng.range(1000) as f32 / 1000.0; self.raid_warning_rf = self.raid_roll(rf, self.wilds.raid_from);
             self.raid_warning_boss = self.boss_due();
             self.raid_warning_name = if self.raid_warning_boss { self.rng.range(4) as u8 } else { 0 };
             self.raid_warning_ticks = RAID_WARNING_TICKS;
@@ -2896,7 +2964,7 @@ impl World {
     // ---------- testing helpers (replicated as signed commands, so peers stay in sync) ----------
     /// Testing actions: 0 give resource (a = resource, b = amount), 1 add villagers (a), 2 add soldiers (a = kind, b = count),
     /// 3 fill every store, 4 start a bandit raid (a = angle in 1/100 rad, b = strength 0..1000), 5 set a building on fire (a = index),
-    /// 6 make everyone healthy, 7 put out all fires, 8 reset the terrain (rivers, moats, earthworks, craters and scorch).
+    /// 6 make everyone healthy, 7 put out all fires, 8 reset the terrain (rivers, moats, earthworks, craters and scorch), 13 lift the fog round (a, b) for 150 units.
     pub fn cheat(&mut self, action: u8, a: i32, b: i32) -> bool {
         match action {
             0 => { if a >= 0 && (a as usize) < N_RES { let cap = self.storage_cap(); self.stock[a as usize] = self.stock[a as usize].saturating_add(b).clamp(0, cap); true } else { false } }
@@ -2908,6 +2976,7 @@ impl World {
             12 => { if self.plague_camp.is_some() { false } else { let a = a as f32 * 0.01; let dist = self.raid_distance(a); self.plague_camp = Some(plague::Camp { x: self.ox as f32 + a.cos() * dist, y: self.oy as f32 + a.sin() * dist, since: self.tick, name: b.rem_euclid(4) as u8 }); true } }   // a plague camp (testing)
             10 => { let name = (a.rem_euclid(4)) as u8; self.begin_boss_raid(RAID_BOSS, a as f32 * 0.01, b.clamp(0, 1000) as f32 / 1000.0, name) }   // a raid led by a boss (testing)
             5 => { self.ignite(a.max(0) as usize); true }
+            13 => { self.reveal(a as f32, b as f32, 150.0); true }
             6 => { self.end_plague(); true }
             9 => { if self.plague_active() { false } else { self.start_plague(); true } }   // an outbreak now
             7 => {   // put out every fire (buildings and wildfires)
@@ -3324,7 +3393,7 @@ impl World {
         let part = |f: &dyn Fn(&mut dyn FnMut(u64))| -> u64 { let mut h: u64 = 0xcbf29ce484222325 ^ self.seed; f(&mut |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); }); h };
         vec![
             part(&|mix| {   // core: the clock, the random stream, the people and everything that is a plain number
-                mix(self.tick); mix(self.rng.0); mix(self.raid_warning_ticks as u64); mix(self.raid_warning_angle.to_bits() as u64); mix(self.raid_warning_rf.to_bits() as u64); mix(self.raid_warning_boss as u64); mix(self.raid_warning_name as u64); mix(self.population as u64); mix(self.sick as u64); mix(self.plague_start); mix(self.plague_end); if let Some(c) = self.plague_camp { mix(c.x.to_bits() as u64); mix(c.y.to_bits() as u64); mix(c.since); mix(c.name as u64); } mix(self.quarantine_until); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.cold_days as u64); mix(self.born as u64); mix(self.arrived as u64); mix(self.enlisted as u64); mix(self.left as u64); for d in self.died { mix(d as u64); } mix(self.unburied as u64); mix(self.buried as u64); mix(self.graves_used as u64); mix(self.devotion as i64 as u64); mix(self.style as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } mix(self.mood as i64 as u64); mix(self.greed as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64));
+                mix(self.tick); mix(self.rng.0); mix(self.raid_warning_ticks as u64); mix(self.raid_warning_angle.to_bits() as u64); mix(self.raid_warning_rf.to_bits() as u64); mix(self.raid_warning_boss as u64); mix(self.raid_warning_name as u64); mix(self.population as u64); mix(self.sick as u64); mix(self.plague_start); mix(self.plague_end); if let Some(c) = self.plague_camp { mix(c.x.to_bits() as u64); mix(c.y.to_bits() as u64); mix(c.since); mix(c.name as u64); } mix(self.quarantine_until); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.cold_days as u64); mix(self.born as u64); mix(self.arrived as u64); mix(self.enlisted as u64); mix(self.left as u64); for d in self.died { mix(d as u64); } mix(self.unburied as u64); mix(self.buried as u64); mix(self.graves_used as u64); mix(self.devotion as i64 as u64); mix(self.style as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } self.wilds.mix(mix); mix(self.mood as i64 as u64); mix(self.greed as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64));
             }),
             part(&|mix| {
                 for s in &self.stock { mix(*s as i64 as u64); }
@@ -3433,6 +3502,8 @@ pub const FARM_YARD: f32 = 5.0;
 mod option_tests;
 #[cfg(test)]
 mod bribe_tests;
+#[cfg(test)]
+mod wilds_tests;
 #[cfg(test)]
 mod restart_tests;
 #[cfg(test)]
@@ -4967,6 +5038,25 @@ mod neutral_tests {
     }
 
     #[test]
+    fn neutral_info_tells_what_a_found_place_holds_and_matches_the_visit() {
+        let seed = 1337;
+        let (_, bx, by) = first_of(seed, 2).expect("a camp");
+        let mut w = world();
+        assert!(w.neutral_info(bx, by, 3.0).is_empty(), "an unseen camp is not told");
+        assert!(w.cheat(13, bx as i32, by as i32));
+        let v = w.neutral_info(bx + 2.0, by, 5.0); assert_eq!(v.len(), 16);
+        assert_eq!((v[0], v[3]), (2.0, 0.0), "a bandit camp, still held"); assert!((v[1] - bx).abs() < 0.01 && (v[2] - by).abs() < 0.01);
+        assert!(v[4] >= 9000.0 && v[4] <= 23000.0, "the strength it takes: {}", v[4]);
+        let weak = army_at(&mut w, bx, by, [2, 0, 0, 0, 0, 0]); assert!(w.det_power(weak) < v[4], "a small party is told it is too weak");
+        let strong = army_at(&mut w, bx, by, [60, 30, 30, 20, 0, 0]); assert!(w.det_power(strong) >= v[4], "a big army is strong enough");
+        let gold = w.stock[GD as usize];
+        assert_eq!(w.visit_neutral(strong), 2);
+        assert_eq!(w.stock[GD as usize] - gold, v[5] as i32, "it paid what it said");
+        assert_eq!(w.neutral_info(bx, by, 3.0)[3], 1.0, "and is told as cleared");
+        assert_eq!(w.det_power(9999), 0.0);
+    }
+
+    #[test]
     fn visiting_a_place_reveals_it() {
         let (_, ax, ay) = first_of(1337, 0).unwrap(); let mut w = world();
         let before = w.neutrals_flat().len(); let id = army_at(&mut w, ax, ay, [5, 0, 0, 0, 0, 0]); w.visit_neutral(id);
@@ -5595,24 +5685,28 @@ mod deposit_tests {
         }
     }
 
+    /// One tick with no raid: a warning is called off as soon as it is given.
+    fn calm(w: &mut World) { w.step(); w.raid_warning_ticks = 0; }
+
     #[test]
     fn a_used_up_deposit_goes_dormant_stops_production_and_wakes_after_regrowing() {
+        // (a deposit test: raids are kept off, so a raid that burns the quarry down at some point of the ten days cannot get in the way; see `calm`)
         let mut w = rich(); let b = mine(&mut w, 6); let di = w.buildings[b].aux as usize;
         w.stock[ST as usize] = 0; let max = w.deposits[di].max;
-        for _ in 0..400 { w.step(); }
+        for _ in 0..400 { calm(&mut w); }
         assert_eq!(w.buildings[b].status, 0, "working"); assert!(w.deposits[di].rem < max, "it is being worked");
         w.deposits[di].rem = 1; w.stock[ST as usize] = 0;
-        for _ in 0..200 { w.step(); }
+        for _ in 0..200 { calm(&mut w); }
         let dep = w.deposits[di]; assert!(dep.asleep && dep.rem * 100 < dep.max * terrain::WAKE_PCT && dep.max > 0, "dormant but still on the map");
         assert_eq!(w.buildings[b].status, 7, "the building says its deposit is dormant");
-        let made = w.stock[ST as usize]; for _ in 0..100 { w.step(); } assert_eq!(w.stock[ST as usize], made, "nothing is produced");
+        let made = w.stock[ST as usize]; for _ in 0..100 { calm(&mut w); } assert_eq!(w.stock[ST as usize], made, "nothing is produced");
         let bd = w.building_deposit(b as u32); assert_eq!(bd[3], 1.0); assert_eq!(bd[2] as i32, dep.max);
         // a day at a time: 2% of the maximum, awake from 15%
         let mut days = 0;
-        while w.deposits[di].asleep && days < 40 { let t = w.tick; while w.tick / DAY == t / DAY { w.step(); } days += 1; w.stock[ST as usize] = 0; }
+        while w.deposits[di].asleep && days < 40 { let t = w.tick; while w.tick / DAY == t / DAY { calm(&mut w); } days += 1; w.stock[ST as usize] = 0; }
         let need = (max * terrain::WAKE_PCT + 99) / 100; assert!(w.deposits[di].rem >= need, "woke at the threshold");
         assert!((7..=9).contains(&days), "2% a day to 15% takes 8 days, took {days}");
-        for _ in 0..300 { w.step(); } assert!(w.stock[ST as usize] > 0, "working again");
+        for _ in 0..300 { calm(&mut w); } assert!(w.stock[ST as usize] > 0, "working again");
         assert_eq!(w.buildings[b].status, 0);
     }
 
