@@ -44,7 +44,7 @@ import { CameraRig } from './render/camera';
 import { Forest } from './render/trees';
 import { buildModel, Effects, type BuildingModel, type VillageView } from './render/buildings';
 import { Deposits } from './render/deposits';
-import { Camps } from './render/camps';
+import { Camps, PLACE_RADIUS } from './render/camps';
 import { depositLabel, depositPanel, parseBuildingDeposit } from './depositinfo';
 import { Crowd } from './render/crowd';
 import { Travellers, type TVillage } from './render/travellers';
@@ -86,6 +86,7 @@ import { showReplayBar, type ReplayBar } from './replayui';
 import { runModelVillageIn } from './modelrunner';
 import { compassWord } from './ui/compass';
 const GOLD = 8;   // the gold store (catalog GD)
+const IRON = 6;   // iron ingots (catalog IR)
 import { bribeOffer, bribeToast, bribeRefusal, BRIBE_CONSEQUENCE } from './bribe';
 import { roleOf, actionsFor, foeFocus, foeTarget, foeCentroid, edgeArrow, shouldAutoJump, foeNear, sallyUnits, newlyLent, drawnUp, isLent, DB_UP, DB_MANUAL_DOWN } from './defence';
 import { arrivalTime, crossingSummary, FIRST_STANCE, objectiveName, orderPins, parseRaidObjective, type BattlePin, type RaidObjective } from './battlefield';
@@ -703,7 +704,7 @@ function showFreshVillage() {
   const o = siteOrigin(mySite);
   showWorld(lv, lv.world, true);
   deposits.sync(lv.world.deposits_flat(), lv.world.deposits_asleep()); deposits.attach(lv.world.buildings_flat());
-  selectedIdx = null; selectedDet = null; selectedRuin = null; selectKind(null); attackTargets.clear(); lentBridges = new Set();
+  selectedIdx = null; selectedDet = null; selectedRuin = null; selectedPlace = null; visitOnArrival.clear(); selectKind(null); attackTargets.clear(); lentBridges = new Set();
   updateSelection(); updateHud(); updateGoals(); refreshAll();
   rig.focus(o.x, o.z, 75);
   for (const r of rivals.values()) chainTo(r);   // the invisible roads to the other villages went with the old village
@@ -923,6 +924,102 @@ function visitPlace(id: number) {
   commit({ op: 'visit', idx: id }); afterLocalChange(); updateDets();
   if (code === 3 || code === 4) return;   // a lair or the plague doctor's camp: the fight is on and the banner tells the story (the report says how it ended)
   ui.toast(code === 0 ? 'The monks heal your sick.' : code === 1 ? 'The ruin gives up its hoard.' : code === 2 ? 'The bandit camp is cleared and its coin is yours (stronger camps and bigger villages pay more).' : 'The camp was too strong: half your army fell. Try again with more men.', code >= 100 ? 'bad' : 'good');
+}
+
+// ---------- wild places: hover, select, send an army in ----------
+const PLACE_NAMES = ['Abbey', 'Ruined castle', 'Bandit camp', 'Lair', "Plague Doctor's camp"];
+const PLACE_TEXT = [
+  'Monks who tend the sick. An army that enters ends any plague in your village and lifts spirits for fifteen days.',
+  'An abandoned castle with a hoard of stone, iron, gold and planks in its cellars. An army that enters carries it home.',
+  'Outlaws behind a stockade. A strong enough army clears it and takes its coin and iron; a weak one loses half its men. Clearing every camp and lair breaks the raiders.',
+  'A warlord holds out among the boulders. Entering starts a real battle against the boss and his band.',
+  'The Plague Doctor spreads sickness from here. Entering starts a battle: kill the doctor to end it.',
+];
+/** Armies whose march ends at a wild place, to go in when they get there. */
+const visitOnArrival = new Map<number, { x: number; z: number }>();
+let selectedPlace: { x: number; z: number } | null = null;
+type PlaceInfo = { kind: number; x: number; z: number; done: boolean; need: number; gold: number; iron: number; h: number };
+function placeInfo(x: number, z: number, r = 3): PlaceInfo | null {
+  const v = lv.world.neutral_info(x, z, r); if (!v.length) return null;
+  return { kind: v[0], x: v[1], z: v[2], done: v[3] > 0, need: v[4], gold: v[5], iron: v[6], h: v[7] };
+}
+/** The wild place on the ground under the pointer, if one has been found. */
+function placeUnder(r: THREE.Raycaster): PlaceInfo | null {
+  const hit = terrain.pick(r.ray); if (!hit) return null;
+  const p = camps.placeAt(hit.x, hit.z); return p ? placeInfo(p.x, p.z) : null;
+}
+const strengthWord = (h: number) => h < 0.25 ? 'weak' : h < 0.55 ? 'well armed' : h < 0.8 ? 'strong' : 'fearsome';
+function placeStatus(p: PlaceInfo) {
+  if (!p.done) return p.kind === 0 ? 'The monks will help an army that comes to them' : p.kind === 1 ? 'Its hoard is still there' : 'Still held';
+  return p.kind === 0 ? 'Visited: the monks have helped you' : p.kind === 1 ? 'Looted' : 'Cleared';
+}
+function placeTip(p: PlaceInfo) {
+  const what = p.kind === 2 && !p.done ? `${strengthWord(p.h)} · ` : '';
+  return `<b>${PLACE_NAMES[p.kind]}</b><small>${what}${placeStatus(p)} · click for details${multiDets.length && !p.done ? ' · right-click to send the selected armies in' : ''}</small>`;
+}
+function selectPlace(p: { x: number; z: number } | null) {
+  selectedPlace = p;
+  if (p) { setMulti([]); selectedIdx = null; selectedRuin = null; selectKind(null); ui.showSelectedTab(); }
+  updateSelection();
+}
+/** The armies in the field, nearest the place first: id, distance and strength. */
+function armiesFor(p: PlaceInfo) {
+  const f = lv.world.det_flat(), out: { id: number; dist: number; power: number; state: number }[] = [];
+  for (let o = 0; o < f.length; o += 17) out.push({ id: f[o], dist: Math.hypot(f[o + 1] - p.x, f[o + 2] - p.z), power: lv.world.det_power(f[o]), state: f[o + 8] });
+  return out.sort((a, b) => a.dist - b.dist);
+}
+function placePane(p: PlaceInfo) {
+  const armies = armiesFor(p).slice(0, 5);
+  let html = `<div><div class="eyebrow">Wild place${p.done ? ' · ' + placeStatus(p) : ''}</div><h2>${PLACE_NAMES[p.kind]}</h2><p class="muted">${p.done ? placeStatus(p) : p.kind === 2 ? `A ${strengthWord(p.h)} band` : placeStatus(p)}</p></div><p>${PLACE_TEXT[p.kind]}</p>`;
+  if (!p.done && p.kind === 2) html += `<div><h3>Strength</h3><p>An army needs a strength of <b>${Math.round(p.need / 100)}</b> to clear it.</p></div><div><h3>Reward</h3><p>${resIcon(GOLD)} ${p.gold} gold, ${resIcon(IRON)} ${p.iron} iron</p></div>`;
+  if (!p.done && p.kind === 1) html += `<div><h3>Hoard</h3><p>Stone, iron, planks and about ${resIcon(GOLD)} ${p.gold} gold.</p></div>`;
+  if (!p.done) {
+    if (!armies.length) html += `<p class="muted">You have no army in the field. Form one at the barracks (Military tab), then send it here.</p>`;
+    else {
+      html += `<div><h3>Your armies</h3>`;
+      for (const a of armies) {
+        const near = a.dist < 14, odds = p.kind === 2 ? (a.power >= p.need ? '<span class="good">strong enough</span>' : '<span class="bad">too weak</span>') : '';
+        html += `<div class="btnrow wrap"><span>Army ${a.id} · strength ${Math.round(a.power / 100)}${odds ? ' · ' + odds : ''}${near ? ' · here' : ` · ${Math.round(a.dist)} away`}</span>`
+          + (near ? `<button class="pbtn primary" data-act="place:enter:${a.id}">Enter</button>` : `<button class="pbtn" data-act="place:send:${a.id}">${visitOnArrival.has(a.id) ? 'On its way' : 'Send in'}</button>`) + `</div>`;
+      }
+      html += `</div>`;
+    }
+  }
+  return html;
+}
+function placeAct(a: string) {
+  const p = selectedPlace && placeInfo(selectedPlace.x, selectedPlace.z); if (!p) return;
+  const [, what, idText] = a.split(':'), id = Number(idText);
+  if (what === 'enter') { visitOnArrival.delete(id); visitPlace(id); updateSelection(); }
+  else if (what === 'send') void sendToPlace([id], p);
+}
+/** March armies to the edge of a wild place; each goes in when it gets there. */
+async function sendToPlace(ids: number[], p: PlaceInfo) {
+  if (p.done) { ui.toast(`This ${PLACE_NAMES[p.kind].toLowerCase()} has already been ${placeStatus(p).toLowerCase()}.`, 'info'); return; }
+  const f = lv.world.det_flat(), pos = new Map<number, [number, number]>(); for (let o = 0; o < f.length; o += 17) pos.set(f[o], [f[o + 1], f[o + 2]]);
+  const sent = await orderArmies(ids, async (id, k) => {
+    const at = pos.get(id); if (!at) return false;
+    const d = Math.hypot(at[0] - p.x, at[1] - p.z), r = 11 + k * 0.6;
+    if (d < 14) { visitPlace(id); return true; }
+    const a = Math.atan2(at[1] - p.z, at[0] - p.x) + k * 0.25;
+    const ok = await orderMarch(id, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r);
+    if (ok) visitOnArrival.set(id, { x: p.x, z: p.z });
+    return ok;
+  });
+  if (sent) ui.toast(`${sent > 1 ? `${sent} armies march` : 'The army marches'} on the ${PLACE_NAMES[p.kind].toLowerCase()} and will go in when it arrives.`, 'info');
+  updateSelection();
+}
+/** Armies sent to a wild place go in once they have stopped beside it; one stopped elsewhere forgets the errand. */
+function checkVisits() {
+  if (!visitOnArrival.size) return;
+  const f = lv.world.det_flat(), at = new Map<number, number>(); for (let o = 0; o < f.length; o += 17) at.set(f[o], o);
+  for (const [id, p] of visitOnArrival) {
+    const o = at.get(id); if (o === undefined) { visitOnArrival.delete(id); continue; }
+    if (pendingArmyOrders.has(id)) continue;
+    const st = f[o + 8]; if (st !== 0 && st !== 5) continue;   // still on the way
+    visitOnArrival.delete(id);
+    if (Math.hypot(f[o + 1] - p.x, f[o + 2] - p.z) < 14) { if (st === 5) { lv.world.det_halt(id); commit({ op: 'halt', idx: id }); } visitPlace(id); if (selectedPlace) updateSelection(); }
+  }
 }
 
 // ---------- war between players ----------
@@ -1330,7 +1427,7 @@ function checkArrivals() {
   for (let o = 0; o < f.length; o += 17) {
     if (f[o + 8] !== 5) continue;
     const id = f[o], key = attackTargets.get(id), r = key ? rivals.get(key) : null;
-    if (pendingArmyOrders.has(id)) continue;
+    if (pendingArmyOrders.has(id) || visitOnArrival.has(id)) continue;
     if (!key || !r) { lv.world.det_halt(id); commit({ op: 'halt', idx: id }); attackTargets.delete(id); ui.toast('The village you marched on is no longer in this world.', 'info'); continue; }
     const u = detUnits(id)!, sent = lv.world.det_send(id);
     if (sent.length && isAlly(key)) {   // an army that marched to an ally comes to help, not to attack: the ally decides whether to let it in (see receiveAid)
@@ -1701,6 +1798,7 @@ let forestDirtyFlag = false;
 function rebuildForest(later = false) {
   const all = [lv, ...[...rivals.values()].map(r => r.village)];
   const rocks: { x: number; z: number; r: number }[] = []; { const d = lv.world.deposits_flat(); for (let i = 0; i + 4 < d.length; i += 5) if (d[i + 4] > 0) rocks.push({ x: d[i + 1], z: d[i + 2], r: 5 }); }   // trees do not grow through ore and rock
+  { const n = lv.world.neutrals_flat(); for (let i = 0; i + 3 < n.length; i += 4) rocks.push({ x: n[i + 1], z: n[i + 2], r: PLACE_RADIUS[n[i]] + 2 }); }   // nor through the abbeys, ruins and camps you have found
   const clear = [...all.flatMap(v => v.clear), ...rocks], lines = all.flatMap(v => v.clearLines), keep = all.flatMap(v => v.keep);
   if (later) forest.rebuildLater(clear, lines, keep); else forest.rebuild(clear, lines, keep);
   forestDirtyFlag = false;
@@ -2352,7 +2450,7 @@ function stepLocal() {
   const t = Number(w.tick());
   if (t % 4 === 0) updateGoals();
   { const l = newlyLent(w.buildings_flat(), lentBridges); lentBridges = l.now; if (l.fresh.length) ui.toast('Lowering the drawbridge for the army', 'info', 'drawbridge'); }
-  pollTrade(); checkArrivals(); stepAwayFights(); stepAis(); updateDets();
+  pollTrade(); checkVisits(); checkArrivals(); stepAwayFights(); stepAis(); updateDets();
   if (previewShown?.request.reinforce !== undefined && !previewWanted) {
     if (selectedDet !== previewShown.id || !w.battle_active()) cancelMarchPreview();
     else queueMarchPreview(previewShown.id, ...previewShown.request.to);
@@ -2361,7 +2459,7 @@ function stepLocal() {
   if (room && room.peers.size) { const hp = w.state_hash_and_parts(); room.broadcastHash({ tick: t, hash: hp[0].toString(), c: sharedCount, p: Array.from(hp.subarray(1), x => x.toString()), tools: usedTools, e: myEpoch }); }   // (one pass over the world, not two)
   if (t % 15 === 0) { if (covOn) covOverlay(); if (covB !== null || covG) covRefocus(); }
   if (hlShown && t % 15 === 0 || (hlRes.length && !hlOn())) applyHighlight();
-  if (t % 3 === 0) { deposits.sync(w.deposits_flat(), w.deposits_asleep()); if (t % 15 === 0) { deposits.attach(w.buildings_flat()); camps.sync(w.neutrals_flat()); } }
+  if (t % 3 === 0) { deposits.sync(w.deposits_flat(), w.deposits_asleep()); if (t % 15 === 0) { deposits.attach(w.buildings_flat()); if (camps.sync(w.neutrals_flat())) forestDirtyFlag = true; } }
   tickShown = false;   // the scene and the HUD follow once all of this frame's ticks are done (see showTicks)
   if (touchPlacement) { const e = touchPlacementEvent(); if (e) updateGhost(e); showTouchTools(); }
   if (ui.stewardOpen() || watch.review) renderWatch();
@@ -2788,9 +2886,9 @@ function multiUpgrade() {
   afterLocalChange(); updateSelection();
 }
 
-function selectBuilding(i: number | null) { setMulti([]); showUpgradeOutline(false); selectedIdx = i; covRefocus(); if (hlOn()) applyHighlight(); if (i !== null) { selectedRuin = null; selectKind(null); ui.showSelectedTab(); } updateSelection(); }
+function selectBuilding(i: number | null) { setMulti([]); showUpgradeOutline(false); selectedIdx = i; if (i !== null) selectedPlace = null; covRefocus(); if (hlOn()) applyHighlight(); if (i !== null) { selectedRuin = null; selectKind(null); ui.showSelectedTab(); } updateSelection(); }
 
-function selectRuin(i: number | null) { selectedRuin = i; if (i !== null) { selectedIdx = null; selectKind(null); ui.showSelectedTab(); } updateSelection(); }
+function selectRuin(i: number | null) { selectedRuin = i; if (i !== null) { selectedPlace = null; selectedIdx = null; selectKind(null); ui.showSelectedTab(); } updateSelection(); }
 
 function demolitionTip(world: World, idx: number) {
   const refund = world.demolition_refund_flat(idx), materials: string[] = [];
@@ -2825,6 +2923,13 @@ function productionProblemsHtml(idx: number): string {
 
 function updateSelection() {
   const w = lv.world;
+  if (selectedPlace !== null) {   // a wild place: what it is, what it holds, and the armies that could go in
+    const p = placeInfo(selectedPlace.x, selectedPlace.z);
+    if (!p) { selectedPlace = null; selRing.visible = false; ui.setSelectedPane(null); return; }
+    selRing.visible = true; selRing.set(p.x, p.z, PLACE_RADIUS[p.kind]);
+    ui.setSelectedPane(placePane(p));
+    return;
+  }
   if (selectedRuin !== null) {   // a ruined building: offer to rebuild it
     const ru = w.ruins_flat();
     if (selectedRuin * 6 >= ru.length) { selectedRuin = null; selRing.visible = false; ui.setSelectedPane(null); return; }
@@ -3115,6 +3220,8 @@ function onAct(a: string) {
   if (a === 'wk:refresh') { updateHud(); return; }
   if (a === 'wk:overview') { ui.openWork(); return; }
   if (a === 'people:work' && selectedIdx !== null) { ui.openVillagers(selectedIdx); return; }
+  if (a.startsWith('place:')) { placeAct(a); return; }
+  if (selectedPlace !== null && a === 'deselect') { selectPlace(null); return; }
   if (selectedRuin !== null) {
     if (a === 'deselect') { selectRuin(null); return; }
     if (a === 'rebuild') {
@@ -3788,7 +3895,7 @@ function bindInput() {
       else if (armyId !== null) { const u = detUnits(armyId), n = u ? u.reduce((a, b) => a + b, 0) : 0; ui.tip(`<b>Army ${armyId}</b><small>${n} soldiers · click to select · Shift+click adds · double-click selects every army in view</small>`, e.clientX, e.clientY); cv.style.cursor = 'pointer'; }
       else if (idx !== null) { const f = lv.world.buildings_flat(), o = idx * 10; ui.tip(`<b>${tierName(f[o], f[o + 1])}</b><small>${defs[f[o]].name} · ${STATUS[f[o + 6]]}</small>`, e.clientX, e.clientY); cv.style.cursor = 'pointer'; }
       else if (hit) { const f = hit.r.village.world.buildings_flat(), o = hit.i * 10; ui.tip(`<b>${esc(hit.r.name)}: ${tierName(f[o], f[o + 1])}</b><small>${defs[f[o]].name} · click to open the Army tab</small>`, e.clientX, e.clientY); cv.style.cursor = 'pointer'; }
-      else { ui.tip(null); cv.style.cursor = multiDets.length ? 'crosshair' : 'default'; }   // with armies selected the ground is where they are sent
+      else { const place = placeUnder(r); if (place) { ui.tip(placeTip(place), e.clientX, e.clientY); cv.style.cursor = 'pointer'; } else { ui.tip(null); cv.style.cursor = multiDets.length ? 'crosshair' : 'default'; } }   // with armies selected the ground is where they are sent
     }
   });
   cv.addEventListener('pointerleave', () => { ui.tip(null); covHover(null); });
@@ -3840,7 +3947,8 @@ function bindInput() {
       if (idx === null && touch) idx = buildingNearTap(e);   // a fingertip that just missed a small building
       if (idx !== null) { if (e.shiftKey || e.ctrlKey || (touch && touchMulti)) toggleMulti(idx); else selectBuilding(idx); showTouchTools(); return; }
       else for (const r of rivals.values()) if (r.village.pick(ray) !== null) { openEmbassy(); ui.toast(`${r.name}'s village — pick it in the Embassy's Diplomacy tab to trade, talk or march on it.`, 'info'); return; }
-      if (idx === null && !(touch && touchMulti)) { selectBuilding(null); selectRuin(null); if (selectedDet !== null) selectDet(null); }   // (while Select more is on, a tap on empty ground keeps the selection)
+      if (idx === null) { const place = placeUnder(pointerRay(e)); if (place) { selectPlace({ x: place.x, z: place.z }); showTouchTools(); return; } }
+      if (idx === null && !(touch && touchMulti)) { selectBuilding(null); selectRuin(null); selectPlace(null); if (selectedDet !== null) selectDet(null); }   // (while Select more is on, a tap on empty ground keeps the selection)
       showTouchTools();
     }
   });
@@ -3857,7 +3965,9 @@ function bindInput() {
     if (selectedKind !== null) { selectKind(null); return; }                // right-click puts the building down again
     if (multiDets.length) {                                                 // armies selected: send them there, spread out a little
       const hit = terrain.pick(pointerRay(e).ray);
-      if (hit && reinforcementPoint(hit.x, hit.z)) void orderArmies(multiDets.slice(), orderDefend);   // right-click on the raiders: the army goes to meet them
+      const place = hit ? placeUnder(pointerRay(e)) : null;
+      if (place && !place.done) void sendToPlace(multiDets.slice(), place);   // right-click on a wild place: the armies march there and go in
+      else if (hit && reinforcementPoint(hit.x, hit.z)) void orderArmies(multiDets.slice(), orderDefend);   // right-click on the raiders: the army goes to meet them
       else if (hit) void orderArmies(multiDets.slice(), (id, k) => { const a = k * 2.4, r = k ? 3 + 2 * Math.sqrt(k) : 0; return orderMarch(id, hit.x + Math.cos(a) * r, hit.z + Math.sin(a) * r); });
       return;
     }

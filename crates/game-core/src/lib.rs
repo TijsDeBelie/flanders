@@ -729,6 +729,29 @@ impl World {
         if let Some(c) = self.plague_camp { v.extend([4.0, c.x, c.y, 0.0]); }   // the plague camp (kind 4) is always known
         v
     }
+    /// The known neutral place nearest (x, y) within `r`: [kind, x, y, done, strength needed (0 when none or unknown), gold, iron, h], or empty.
+    /// Kind 4 is the plague doctor's camp. What a camp pays is what `visit_neutral` would give now (it grows with the village).
+    pub fn neutral_info(&self, x: f32, y: f32, r: f32) -> Vec<f32> {
+        let mut best: Option<(f32, Vec<f32>)> = None;
+        for (i, &(kind, nx, ny)) in terrain::neutrals(self.seed).iter().enumerate() {
+            let d = (nx - x).hypot(ny - y);
+            if d > r || !self.is_seen(nx, ny) || best.as_ref().is_some_and(|b| b.0 <= d) { continue; }
+            let h = terrain::h01(self.seed ^ 0x52, i as i32, 3);
+            let done = self.neutral_done.get(i).copied().unwrap_or(false);
+            let (need, gold, iron) = match kind {
+                1 => (0.0, (80.0 * (0.6 + h)).round(), (20.0 * (0.6 + h)).round()),
+                2 => { let (g, ir) = Self::camp_loot(h, self.population, self.tick); (9000.0 + 14000.0 * h, g as f32, ir as f32) }
+                _ => (0.0, 0.0, 0.0),
+            };
+            best = Some((d, vec![kind as f32, nx, ny, done as u8 as f32, need, gold, iron, h]));
+        }
+        if let Some(c) = self.plague_camp { let d = (c.x - x).hypot(c.y - y); if d <= r && best.as_ref().map_or(true, |b| d < b.0) { best = Some((d, vec![4.0, c.x, c.y, 0.0, 0.0, 0.0, 0.0, 0.5])); } }
+        best.map(|b| b.1).unwrap_or_default()
+    }
+    /// A field army's strength as a bandit camp measures it (the same sum `visit_neutral` compares with the camp's), 0 when there is no such army.
+    pub fn det_power(&self, id: u32) -> f32 {
+        self.dets.iter().find(|d| d.id == id).map_or(0.0, |d| (0..NK).map(|k| d.units[k] as f32 * UNITS[k].hp * UNITS[k].dmg / UNITS[k].cd.max(0.5)).sum())
+    }
     /// What a cleared bandit camp pays: 120 gold and 15 iron, times a share for the camp's own strength (`h` 0..1: 0.7 for the weakest, 1.5 for the strongest, the same `h` that sets its power check)
     /// and a share for the village's progress (1.0 for a young village up to 2.0 for a grown one: the same measure as a boss's, see `boss_scale`).
     pub(crate) fn camp_loot(h: f32, population: u32, tick: u64) -> (i32, i32) {
@@ -2896,7 +2919,7 @@ impl World {
     // ---------- testing helpers (replicated as signed commands, so peers stay in sync) ----------
     /// Testing actions: 0 give resource (a = resource, b = amount), 1 add villagers (a), 2 add soldiers (a = kind, b = count),
     /// 3 fill every store, 4 start a bandit raid (a = angle in 1/100 rad, b = strength 0..1000), 5 set a building on fire (a = index),
-    /// 6 make everyone healthy, 7 put out all fires, 8 reset the terrain (rivers, moats, earthworks, craters and scorch).
+    /// 6 make everyone healthy, 7 put out all fires, 8 reset the terrain (rivers, moats, earthworks, craters and scorch), 13 lift the fog round (a, b) for 150 units.
     pub fn cheat(&mut self, action: u8, a: i32, b: i32) -> bool {
         match action {
             0 => { if a >= 0 && (a as usize) < N_RES { let cap = self.storage_cap(); self.stock[a as usize] = self.stock[a as usize].saturating_add(b).clamp(0, cap); true } else { false } }
@@ -2908,6 +2931,7 @@ impl World {
             12 => { if self.plague_camp.is_some() { false } else { let a = a as f32 * 0.01; let dist = self.raid_distance(a); self.plague_camp = Some(plague::Camp { x: self.ox as f32 + a.cos() * dist, y: self.oy as f32 + a.sin() * dist, since: self.tick, name: b.rem_euclid(4) as u8 }); true } }   // a plague camp (testing)
             10 => { let name = (a.rem_euclid(4)) as u8; self.begin_boss_raid(RAID_BOSS, a as f32 * 0.01, b.clamp(0, 1000) as f32 / 1000.0, name) }   // a raid led by a boss (testing)
             5 => { self.ignite(a.max(0) as usize); true }
+            13 => { self.reveal(a as f32, b as f32, 150.0); true }
             6 => { self.end_plague(); true }
             9 => { if self.plague_active() { false } else { self.start_plague(); true } }   // an outbreak now
             7 => {   // put out every fire (buildings and wildfires)
@@ -4964,6 +4988,25 @@ mod neutral_tests {
         assert_eq!((g0, i0), (84, 11), "the weakest camp of a young village"); assert!(g1 > g0, "a stronger camp pays more"); assert!(g2 > g1 && i2 > i0, "a grown village finds more in it");
         let mut w = world(); let far = army_at(&mut w, 0.0, 0.0, [5, 0, 0, 0, 0, 0]);
         assert_eq!(w.visit_neutral(far), -2, "nothing near the village"); assert_eq!(w.visit_neutral(999), -1);
+    }
+
+    #[test]
+    fn neutral_info_tells_what_a_found_place_holds_and_matches_the_visit() {
+        let seed = 1337;
+        let (_, bx, by) = first_of(seed, 2).expect("a camp");
+        let mut w = world();
+        assert!(w.neutral_info(bx, by, 3.0).is_empty(), "an unseen camp is not told");
+        assert!(w.cheat(13, bx as i32, by as i32));
+        let v = w.neutral_info(bx + 2.0, by, 5.0); assert_eq!(v.len(), 8);
+        assert_eq!((v[0], v[3]), (2.0, 0.0), "a bandit camp, still held"); assert!((v[1] - bx).abs() < 0.01 && (v[2] - by).abs() < 0.01);
+        assert!(v[4] >= 9000.0 && v[4] <= 23000.0, "the strength it takes: {}", v[4]);
+        let weak = army_at(&mut w, bx, by, [2, 0, 0, 0, 0, 0]); assert!(w.det_power(weak) < v[4], "a small party is told it is too weak");
+        let strong = army_at(&mut w, bx, by, [60, 30, 30, 20, 0, 0]); assert!(w.det_power(strong) >= v[4], "a big army is strong enough");
+        let gold = w.stock[GD as usize];
+        assert_eq!(w.visit_neutral(strong), 2);
+        assert_eq!(w.stock[GD as usize] - gold, v[5] as i32, "it paid what it said");
+        assert_eq!(w.neutral_info(bx, by, 3.0)[3], 1.0, "and is told as cleared");
+        assert_eq!(w.det_power(9999), 0.0);
     }
 
     #[test]

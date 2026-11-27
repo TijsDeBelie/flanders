@@ -4,6 +4,19 @@ export interface Release { version: string; date: string; title: string; added: 
 
 export const RELEASES: Release[] = [
   {
+    version: '0.7.2', date: '2026-11-27', title: 'Mines in the hillside and wild places you can visit',
+    added: [
+      'Abbeys and ruined castles now stand on the map as buildings (they were only on the minimap): a stone church with a bell tower, a cloister and graves; a castle of broken walls and split towers on a heap of rubble with its hoard in the middle.',
+      'Point at a wild place to see what it is; click it to select it. The panel tells what it holds, how strong a bandit camp is, what clearing it pays, and which of your armies is strong enough, with a Send in button for each army. An army sent in marches there and goes in by itself when it arrives. With armies selected, right-click a wild place to send them in.',
+    ],
+    changed: [
+      'Bandit camps are redesigned: a stockade of sharpened stakes with a skull-topped gate, ridge tents with their doors to the fire, the chief\'s round tent and banner, a cooking spit, benches, a lookout tower, a weapon rack, a prisoner cage and the loot pile. Once cleared the tents slump, the fire dies and the loot is gone.',
+      'Mines are cut into the deposit: a rocky hill rises over the ore, its face cut sheer behind the door frame, so the door opens into the rock. Quarries cut three benches of pale fresh stone into their deposit above the pit. Rocks no longer stand in the doorway.',
+      'Trees no longer grow through the abbeys, ruins and camps you have found.',
+    ],
+    fixed: [],
+  },
+  {
     version: '0.7.1', date: '2026-11-25', title: 'Better house designs',
     added: [
       'House designs are rebuilt to fit each house: a second chimney on the ridge, flower boxes under the windows and pots at the door, a lean-to woodshed with a log stack, a dovecote on the ridge, a loft dormer growing out of the roof, a raised kitchen garden behind the house, a carved gable end with bargeboards and a sunburst, and a cellar hatch with stone cheeks. Textured soil, leaves, bark and straw.',
