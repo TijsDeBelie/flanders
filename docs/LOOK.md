@@ -50,14 +50,19 @@ proxies. `tests/chamfer.test.mjs` checks the shape is closed, wound outwards, th
 - Still plain: garden lawns and pastures inside building models (the palace garden, parks) are flat-colour materials. Giving them the terrain's grass shader
   (`patchGround`) is the next small step.
 
+**Phase 5: snow on the village in winter.** `src/render/snow.ts`: one shader patch, added after any patch a material already has, whitens what faces up
+(roofs up to about 55 degrees, the ground, tops of walls, beams, hay, fields, tree crowns) with a ragged, noisy edge; walls and steep faces stay bare, and the
+baked shade of eaves and corners shows through. One shared uniform says how much (`snowCover(tick)`): it settles over the first day and a half of winter and
+melts over the last two days and the first day of spring. Added to every opaque, non-glowing building material (in `B.add` and the shared set), the terrain and
+the near tree crowns. Clones of a snowy material (colour variants, roof palettes, merged batches) keep the patch (`keepSnow`). `tests/snow.test.mjs` checks the
+timing; `node tools/lookshots.mjs <dir> --winter` shoots full snow (`__game.setSnow`). Not snowy yet: fences and walls drawn by the Walls mesh, distant tree
+crowns (lit per vertex), and the building test hall's platform.
+
+**Phase 6: villagers.** In `src/render/crowd.ts`: a head 1.38 times bigger (raised a little off the collar), hats and helmets grown to fit, a torso 12%
+rounder, and the same for the distant two-part figures. Only the part shapes changed: joints, gait, poses and the hats, tools and shields hung on them are as
+before (`HEAD_SCALE`, `HEAD_LIFT`, `TORSO_ROUND`).
+
 ## Next
-
-**Phase 5: snow on the village in winter.** The core already reports the season (`src/winter.ts`). One shader patch on the shared materials whitens surfaces that
-face up (roofs, ground, tree tops, log piles) with a soft, noisy edge, faded in at the start of winter and out at the end. The roof textures' height picture can
-make snow sit in the courses. Cheap: no new geometry.
-
-**Phase 6: villagers.** Bigger heads, rounder bodies and bigger hats, in `src/render/crowd.ts` and `src/render/people.ts`. They are instanced, so proportions
-cost nothing to draw. Keep job-readable silhouettes (hats and tools in `LOOKS`).
 
 **Phase 7: new items from the concept sheets.** A three-tier weigh house (wooden scale frame → covered stone yard → stone merchant's house with copper roofs),
 peddler carts with a mule, signposts and goods piles. They need two more painters in `painted.ts`: copper verdigris (teal, standing seams, pale streaks) and

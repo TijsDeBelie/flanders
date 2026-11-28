@@ -42,6 +42,7 @@ import { Terrain, HALF, STEP, NV } from './render/terrain';
 import { Atmosphere } from './render/sky';
 import { installGrade, gradeInstalled } from './render/look';
 import { PostChain } from './render/post';
+import { snowCover, snowUniform } from './render/snow';
 import { CameraRig } from './render/camera';
 import { Forest } from './render/trees';
 import { buildModel, Effects, type BuildingModel, type VillageView } from './render/buildings';
@@ -4230,6 +4231,7 @@ let tideLevel = 0;   // the water rises and falls a little, slowly
 let noteT = 0, sCount = 0, sT = 0, fireBuf = new Float32Array(256);
 const effectView = new EffectView();
 let lastPhase = -1;   // the day phase the light was last set for
+let snowOverride: number | null = null;   // (testing: a fixed amount of snow, see __game.setSnow)
 let last = 0, miniT = 0, scareT = 0, scares: { x: number; z: number }[] = [];
 let forestShadowVersion = -1;
 /** Draw the scene: through the image effects when any is on, else straight to the screen. */
@@ -4414,6 +4416,7 @@ function frame(now: number) {
   const s = settings(), drawCrowd = (s.crowds || rig.following) && !showroom;
   { // the time of day: the light follows the village clock, smoothly between ticks
     const ph = dayPhase(Number(lv.world.tick()) + (replay ? 0 : acc));
+    snowUniform.value = snowOverride ?? snowCover(Number(lv.world.tick()));   // snow in winter (render/snow.ts)
     if (Math.abs(ph - lastPhase) > 0.0008 || lastPhase < 0) { lastPhase = ph; atmo.setClock(ph); forest.setLight(atmo.lightDirection, atmo.sun, atmo.hemi); setNightLight(atmo.night); for (const v of all) v.props.setNight(atmo.night); }
   }
   lightLamps(all, now);
@@ -4497,7 +4500,7 @@ function debugPlace(kind: number, dx: number, dy: number, r = 0) {
 }
 if (DEBUG_HOOKS) (window as any).__game = {
   get worldShips() { return worldShips; }, startReplay, stopReplay, get replay() { return replay; }, debugPlace, runModelVillage, selectBuilding, toggleMulti, selectWallRun, selectRuin, KIND_ICON, setSpeed, selectKind, frame, updateGhost,
-  get renderer() { return renderer; }, get forest() { return forest; }, get atmo() { return atmo; }, get post() { return post; }, toggleShowroom, get scene() { return scene; }, get terrain() { return terrain; }, get rig() { return rig; },
+  get renderer() { return renderer; }, get forest() { return forest; }, get atmo() { return atmo; }, get post() { return post; }, toggleShowroom, setSnow(v: number | null) { snowOverride = v; }, get scene() { return scene; }, get terrain() { return terrain; }, get rig() { return rig; },
   get perf() { return perf; }, get world() { return lv.world; }, get lv() { return lv; }, get rivals() { return rivals; }, get wildlife() { return wildlife; }, get fx() { return fx; }, get crowd() { return crowd; }, ui, afterLocalChange, refreshTerrain,
   /** (testing) run n whole ticks of the live game at once: your village and, in a PVE game, the computer's. */
   stepTicks(n: number) { for (let i = 0; i < n; i++) stepLocal(); lv.afterTick(); },

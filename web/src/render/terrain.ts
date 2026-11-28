@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { addSnow } from './snow';
 import { terrain_land_rows, type World } from '../wasm/game_core.js';
 import { patchWater, waterNormalTexture, type WaterSurface } from './water';
 import { freeze } from './static';
@@ -98,6 +99,7 @@ export class Terrain {
     this.updateRegion(0, 0, NV - 1, NV - 1);
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: grainTexture(), roughness: 0.96, metalness: 0 });
     patchGround(mat, groundDetailTexture());
+    addSnow(mat);   // (after the ground's own patch: see snow.ts)
     this.mesh = new THREE.Group();
     const CH = 64;   // cells per chunk side
     for (let j0 = 0; j0 < NV - 1; j0 += CH) for (let i0 = 0; i0 < NV - 1; i0 += CH) {

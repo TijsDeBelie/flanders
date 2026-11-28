@@ -9,6 +9,7 @@ import { makeBoat } from './field';
 import { tileableNoise } from './water';
 import { painted, PAINTERS } from './painted';
 import { chamferBox, bevelFor } from './chamfer';
+import { addSnow, keepSnow } from './snow';
 
 // ---------- procedural textures & materials ----------
 const TILE = 2; // one texture repeat covers 2 world units
@@ -105,12 +106,18 @@ function makeMats() {
     stained2: col(0xd84a5a, { emissive: 0xaa2233, emissiveIntensity: 0.9 }),
   };
 }
-const M = () => (_m ??= makeMats());
+const M = () => (_m ??= withSnow(makeMats()));
+/** The shared materials take snow in winter too (walls and fences draw with them without passing through `B.add`). */
+function withSnow<T extends Record<string, THREE.Material | THREE.Material[]>>(mats: T): T { for (const m of Object.values(mats)) snowOn(m); return mats; }
 /** Wall materials by tier: palisade, timber, stone, battlemented stone. */
 /** Kinds drawn by something else (walls, fences and gates by the Walls mesh, moats by the terrain): an empty placeholder keeps the indices lined up. */
 const PLAIN = new Set([2, 21, 22, 24, 32, 33, 34, 37, 38]);
 export const wallMats = (): THREE.MeshStandardMaterial[] => [M().wood, M().timber, M().stone, M().stone];
 
+/** Snow in winter (snow.ts) on every opaque surface of a building that does not glow (lit windows, fires and coloured glass stay clear). */
+function snowOn(mat: THREE.Material | THREE.Material[]) {
+  for (const m of Array.isArray(mat) ? mat : [mat]) { const s = m as THREE.MeshStandardMaterial; const glow = s.emissive ? s.emissive.getHex() !== 0 && (s.emissiveIntensity ?? 0) >= 0.8 : false; if (!m.transparent && (s.isMeshStandardMaterial || (m as THREE.MeshLambertMaterial).isMeshLambertMaterial) && !glow && m !== _m?.glass) addSnow(m); }
+}
 // ---------- geometry helpers ----------
 function uvBox(g: THREE.BoxGeometry, w: number, h: number, d: number) {
   const uv = g.attributes.uv, ext = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
@@ -144,7 +151,7 @@ class B {
     }
     geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
   }
-  private add<T extends THREE.Object3D>(o: T, x: number, y: number, z: number) { o.position.set(x, y, z); o.traverse(c => { const m = c as THREE.Mesh; m.castShadow = true; m.receiveShadow = true; if (m.isMesh) { this.shade(m.geometry, y); if (this.roof && m.material === M().tile) m.material = roofTile(this.roof); } }); this.g.add(o); return o; }
+  private add<T extends THREE.Object3D>(o: T, x: number, y: number, z: number) { o.position.set(x, y, z); o.traverse(c => { const m = c as THREE.Mesh; m.castShadow = true; m.receiveShadow = true; if (m.isMesh) { this.shade(m.geometry, y); if (this.roof && m.material === M().tile) m.material = roofTile(this.roof); snowOn(m.material); } }); this.g.add(o); return o; }
   box(w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0, ry = 0) {
     // soft edges on anything big enough to show them (see chamfer.ts); small trim stays a plain box
     const r = bevelFor(w, h, d), geo = r > 0 ? chamferBox(w, h, d, r, TILE) : new THREE.BoxGeometry(w, h, d);
@@ -257,7 +264,7 @@ export function roofTile(r: number): THREE.Material {
   let m = roofMats.get(r);
   if (!m) {
     const c = (M().tile as THREE.MeshStandardMaterial).clone(), t = ROOFS[r]?.rgb ?? ROOFS[0].rgb, base = ROOFS[0].rgb;
-    c.color.setRGB(t[0] / base[0], t[1] / base[1], t[2] / base[2]); roofMats.set(r, c); m = c;
+    c.color.setRGB(t[0] / base[0], t[1] / base[1], t[2] / base[2]); keepSnow(M().tile, c); roofMats.set(r, c); m = c;
   }
   return m;
 }
@@ -275,7 +282,7 @@ export function setNightLight(n: number) {
 function variantOf(mat: THREE.Material, v: number): THREE.Material {
   const key = mat.uuid + ':' + v; let c = variantCache.get(key);
   if (!c) {
-    c = mat.clone(); const sm = c as THREE.MeshStandardMaterial;
+    c = mat.clone(); keepSnow(mat, c); const sm = c as THREE.MeshStandardMaterial;
     if (mat === M().glass && v !== -1) { glassVariants.push(sm); sm.emissive.setRGB(1, 0.72, 0.35); sm.emissiveIntensity = nightLevel * 1.7; }
     if (v === -1) { sm.color.multiplyScalar(0.22); sm.roughness = 1; if (sm.emissive) sm.emissive.setHex(0x1a0600); }
     else { const shade = 0.88 + v * 0.07; sm.color.multiplyScalar(shade); sm.color.offsetHSL((v - 1.5) * 0.012, 0, 0); }
@@ -306,7 +313,7 @@ function foldKey(mat: THREE.Material): string | null {
 /** One shared material per surface: the first material's settings with a white base colour, drawing the vertex colours. */
 function foldedMaterial(key: string, like: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
   let m = foldedMats.get(key);
-  if (!m) { m = like.clone(); m.color.setRGB(1, 1, 1); m.vertexColors = true; m.onBeforeCompile = like.onBeforeCompile; m.needsUpdate = true; foldedMats.set(key, m); }
+  if (!m) { m = like.clone(); m.color.setRGB(1, 1, 1); m.vertexColors = true; m.onBeforeCompile = like.onBeforeCompile; m.customProgramCacheKey = like.customProgramCacheKey; m.needsUpdate = true; foldedMats.set(key, m); }
   return m;
 }
 /** The part's vertex colours times the material's base colour (white vertex colours when the material drew none), as floats; null if the part cannot be baked. */
