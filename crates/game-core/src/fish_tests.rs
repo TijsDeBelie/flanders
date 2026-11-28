@@ -113,7 +113,7 @@ fn every_kind_of_food_is_eaten_together_and_cooked_food_goes_further() {
 #[test]
 fn the_food_reserve_uses_current_rations_and_meal_credit() {
     let mut w = World::new(1337, 0, 0);
-    assert_eq!(w.food_reserve_days(), 0.375);
+    assert_eq!(w.food_reserve_days(), 0.375 * START_GRAIN as f64 / 120.0, "the starting grain (0.375 days at the old 120)");
     w.stock = [0; N_RES];
     w.stock[BD as usize] = 320;
     w.away[0] = 5;

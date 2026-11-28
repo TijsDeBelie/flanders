@@ -146,3 +146,4 @@ All rules live in `crates/game-core/src/wilds.rs` (constants at its top), are pa
 
 ## Core mechanics review (2026-11-28)
 See [REVIEW-2026-11-28.md](REVIEW-2026-11-28.md): the opening now runs out of food on most sites with one farm, happiness has almost no effect on play, the goals end at the castle and soldiers cost nothing to keep. Ranked proposals: fix the opening, happiness with teeth (growth, leaving, work pace, needs by house tier), standing policies, soldiers' wages, renown and titles after the castle, raids an absent player can survive.
+Implemented in the follow-up: proposals 1-6 (decrees, needs, growth and leaving, wages, renown, titles and charters, the first raid), a focus event, and a win-conditions proposal (a reign with a crown for the most renown, and conquest, concord and pacification victories): see the end of the review.

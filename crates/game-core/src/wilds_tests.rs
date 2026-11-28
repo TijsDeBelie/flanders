@@ -122,7 +122,11 @@ fn an_army_claims_a_mineshaft_its_garrison_sends_ore_home_and_comes_back_when_ab
     assert_eq!(w.wild_act(2, 0), -3); assert_eq!(w.wild_act(9, 0), -1); assert_eq!(w.wild_act(2, 9999), -1);
     // a mule train on the road still arrives after the shaft is given up
     let (cart, due) = (w.wilds.shafts[0].cart, w.wilds.shafts[0].cart_due);
-    if due > 0 { let ore_before = w.stock[r]; while w.tick < due { days(&mut w, 1); } assert_eq!(w.stock[r], ore_before + cart, "the mule train arrives"); }
+    if due > 0 {   // (unless outlaws camped near its way rob it: then they say so)
+        let ore_before = w.stock[r]; w.take_events(); while w.tick < due { days(&mut w, 1); }
+        let robbed = w.take_events().chunks(4).any(|e| e[0] == EV_WILD && e[1] == WILD_CART_ROBBED);
+        assert_eq!(w.stock[r], ore_before + if robbed { 0 } else { cart }, "the mule train arrives, or the outlaws had it");
+    }
     // attacks: more often with fewer men, never far from every camp
     assert!(World::shaft_attack_chance(10.0, 1) > World::shaft_attack_chance(10.0, 8));
     assert_eq!(World::shaft_attack_chance(OUTLAW_REACH, 1), 0.0);

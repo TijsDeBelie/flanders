@@ -35,7 +35,7 @@ impl World {
     /// What `n` units of a good cost at the market now, in coins.
     pub(crate) fn market_cost(&self, res: u8, n: i32) -> i32 {
         if res == TL { return n.saturating_mul(TOOL_PRICE); }
-        ((self.price_x100(res as usize) as i64 * n as i64 * MARKUP_PCT + 9_999) / 10_000).min(i32::MAX as i64) as i32
+        ((self.price_x100(res as usize) as i64 * n as i64 * self.markup_pct() + 9_999) / 10_000).min(i32::MAX as i64) as i32
     }
 
     pub(crate) fn refill_emergency_tools(&mut self) {
@@ -62,7 +62,7 @@ impl World {
         for (s, g) in MARKET_GOODS.iter().enumerate() {
             let (cap, refill) = self.market_cap_refill(s); let sold = self.market_sold[s].max(0);
             let days = if sold == 0 || refill <= 0 { 0 } else { (sold + refill - 1) / refill };
-            v.extend([g.0 as i32, (cap - sold).max(0), cap, refill, (self.price_x100(g.0 as usize) as i64 * MARKUP_PCT / 100) as i32, days]);
+            v.extend([g.0 as i32, (cap - sold).max(0), cap, refill, (self.price_x100(g.0 as usize) as i64 * self.markup_pct() / 100) as i32, days]);
         }
         if self.estate.active {
             let [sold, next] = self.emergency_tools;

@@ -4,6 +4,24 @@ export interface Release { version: string; date: string; title: string; added: 
 
 export const RELEASES: Release[] = [
   {
+    version: '0.7.3', date: '2026-11-28', title: 'Ruling the village',
+    added: [
+      'A focus for the village: every twelve days your reeve proposes three or four areas to put the village\'s effort into for eight days (war, farming, diplomacy, trade, faith, industry or mining). Each costs goods or gold to take up; you can turn them all down.',
+      'Decrees at the town hall: taxes (low, normal, high), rations (lean, normal, generous), long hours and a muster. Each trades gold, food or work against happiness.',
+      'Renown and titles: your people, your hall, camps and lairs cleared, mineshafts held and years survived raise you from Lord to Baron, Count and Duke. Each title lets you grant a charter (market, mining, military, farming or piety). Bandits raid a titled village harder.',
+      'Soldiers are paid: a coin a day for every three at home and every two out in the field. When the pay chest is empty a soldier deserts each day.',
+      'Houses have needs: a better house wants a second food besides grain, then a market and a chapel, then tools and a well. A house grows only when the needs of its next tier are met; unmet needs cost happiness. The house panel lists them.',
+      'Mule trains from a mineshaft without a road can be robbed by outlaws camped near their way.',
+    ],
+    changed: [
+      'Happiness matters: newcomers arrive a few a day (more when the village is happy) and only while the stores hold a meal for everyone; below 30 a family leaves each day (not in the first days); and work goes 10% slower below 20 and 5% faster above 70.',
+      'The opening: the village starts with 360 grain (was 120), and the first goals ask for a farm first, then two houses, then a second farm. One house and one farm no longer run out of food.',
+      'The first bandit raid is a small one.',
+      'The computer villages rule too: they set taxes by their mood, muster when raiders come, take up a focus that suits them and grant charters.',
+    ],
+    fixed: [],
+  },
+  {
     version: '0.7.2', date: '2026-11-27', title: 'Mines in the hillside and a living wild',
     added: [
       'Raids come from the camps: the bandit camps and lairs still standing near your village set how often raids come and how strong they are. Clear the camps around you and raids come up to two and a half times less often, and weaker. The warning names the camp the raiders set out from, and a column of black smoke rises over it.',

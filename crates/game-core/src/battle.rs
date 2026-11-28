@@ -184,7 +184,7 @@ impl World {
         for (gx, gy, kind, n) in guards {
             for i in 0..n { let a = i as f32 * 1.4; let mut u = Unit::new(0, kind, gx + a.cos(), gy + a.sin(), 0.0); u.hx = gx; u.hy = gy; u.charge = false; units.push(u); }
         }
-        let militia = (self.population / 5).min(14) + self.perks().militia;   // beacons, turrets and guard huts call more villagers to arms
+        let militia = (self.population / 5).min(14) * self.militia_pct() / 100 + self.perks().militia;   // (a muster or the war focus calls up more: see realm.rs)   // beacons, turrets and guard huts call more villagers to arms
         for i in 0..militia { let a = i as f32 * 0.9; let mut u = Unit::new(0, MILITIA, hall.0 + a.cos() * 8.0, hall.1 + a.sin() * 8.0, 0.0); u.hx = hall.0 + a.cos() * 9.0; u.hy = hall.1 + a.sin() * 9.0; u.cd = 1.0; units.push(u); }
         // defenders run to the walls and defences on the side the attackers come from, and stand on top of them where there is a walkway
         {
@@ -1339,6 +1339,7 @@ impl World {
         for k in 0..NK { self.vets[k] = self.vets[k].min(self.army[k]); }
         let effort: u32 = self.buildings.iter().filter(|b| b.kind == BARRACKS && b.staff > 0).map(|b| b.tier as u32 + 1).sum();
         if effort == 0 { return; }
+        let effort = effort * self.train_pct() / 100;   // (the war focus and the military charter: see realm.rs)
         let effort = effort + effort * self.perks().train_pct / 100 + if self.tick % 4 < (effort * self.perks().train_pct % 100 / 25) as u64 { 1 } else { 0 };   // training dummies: faster drill (the remainder is spread over the ticks)
         let kinds: Vec<usize> = (0..NK).filter(|&k| self.queue[k] > 0).collect();
         if kinds.is_empty() { self.train_prog = 0; return; }

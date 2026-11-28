@@ -20,7 +20,7 @@ import { CommandScreen } from './ui/commandscreen';
 import { parseLedger, steadyRate, EXTRA_INFO, fmtRate } from './flowrate';
 import { parseRows, parseTotals, stepWant, parseProductionProblems, productionProblemText } from './workview';
 import { HighlightState, addCatalogKinds, stockSources, mergeSources, summarize, kindLine, tierText, STRIDE, ST_WAIT, ST_EXHAUSTED, ST_FULL, ST_RESERVE } from './stockhighlight';
-import { CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, resIcon, STATUS, defs, tierName, KIND_ICON, units, NOPAD, PEN_SPACING, bosses, LEVEL_TOOL, PLANT_TOOL } from './data';
+import { CATS, DEPOSIT, EVENT_TEXT, PLACE_ERRORS, RES, resIcon, STATUS, defs, FOCI, CHARTERS, TITLES, tierName, KIND_ICON, units, NOPAD, PEN_SPACING, bosses, LEVEL_TOOL, PLANT_TOOL } from './data';
 import { BATTLE_STRIDE, parseBoss, bossLine, bossTitle, hpFraction, raidAnnouncement, lairAnnouncement, reportBoss, reportLine } from './bosses';
 import { PenPreview } from './render/pen';
 import { AnchorGhost, anchorShape, doorInWorld } from './render/anchorghost';
@@ -444,7 +444,7 @@ function advanceReplica(r: Rival, tick: number): boolean {
 /** Bring the scenes of other villages up to date after their commands: at most every 400 ms per village, and their ground at most once a second. */
 /** Rival commands that change nothing syncFull rebuilds (trade, diplomacy, armies on the move, training, research): the per-tick afterTick() covers what they
  *  do show. Any op not listed here (including new ones) still gets the full rebuild. */
-const LIGHT_OPS: ReadonlySet<string> = new Set(['accept', 'arrive', 'ask', 'attack', 'battleorder', 'bribe', 'buy', 'caravan', 'carhome', 'choose', 'envoy', 'form', 'goods', 'halt', 'journey', 'march', 'marriage', 'merge', 'raid', 'rally', 'recall', 'recallaid', 'reinforce', 'research', 'reserve', 'retreat', 'return', 'sendaid', 'sendatk', 'split', 'train', 'treaty', 'turnback', 'untrain', 'visit', 'war', 'wild', 'workers']);
+const LIGHT_OPS: ReadonlySet<string> = new Set(['accept', 'arrive', 'ask', 'attack', 'battleorder', 'bribe', 'buy', 'caravan', 'carhome', 'choose', 'envoy', 'form', 'goods', 'halt', 'journey', 'march', 'marriage', 'merge', 'raid', 'rally', 'recall', 'recallaid', 'reinforce', 'research', 'reserve', 'retreat', 'return', 'sendaid', 'sendatk', 'split', 'train', 'treaty', 'turnback', 'untrain', 'visit', 'war', 'wild', 'realm', 'workers']);
 function flushRivals(now: number) {
   for (const r of rivals.values()) {
     if (!r.dirty || r.loading || r.broken || replay?.target === r.village || now - (r.flushedAt ?? -1e9) < 400) continue;
@@ -2951,6 +2951,30 @@ function demolitionTip(world: World, idx: number) {
   return materials.length ? `Returns ${materials.join(', ')} to your stock.` : '0 materials recovered.';
 }
 
+/** The town hall's rule: decrees, title and charters, the focus, and the soldiers' pay (see realm.rs). */
+function realmHtml(): string {
+  const r = Array.from(lv.world.realm_flat()), [tax, rations, long, muster, title, renown, next, left, focus, focusDays, home, field, pay] = r, granted = r.slice(13);
+  const pick = (act: number, cur: number, names: string[]) => `<div class="btnrow wrap">${names.map((n, v) => `<button class="pbtn${v === cur ? ' primary' : ''}" data-act="realm:${act}:${v}" ${v === cur ? 'disabled' : ''}>${n}</button>`).join('')}</div>`;
+  let h = `<div class="act-sec"><h3>Decrees</h3>`;
+  h += `<p>Taxes <span class="muted">(low: half the gold, +6 happiness · high: half again, −8)</span></p>${pick(1, tax, ['Normal', 'Low', 'High'])}`;
+  h += `<p>Rations <span class="muted">(lean: 80% food, −6, no births · generous: 120%, +4)</span></p>${pick(2, rations, ['Normal', 'Lean', 'Generous'])}`;
+  h += `<p>Long hours <span class="muted">(workplaces +15%, −6 happiness)</span></p>${pick(3, long, ['Off', 'On'])}`;
+  h += `<p>Muster <span class="muted">(twice the militia in a raid, workplaces −10%)</span></p>${pick(4, muster, ['Off', 'On'])}</div>`;
+  h += `<div class="act-sec"><h3>${TITLES[title]}</h3><p>Renown <b>${renown}</b>${next ? ` · ${TITLES[title + 1]} at ${next}` : ''}. Renown comes from your people, your hall, camps and lairs cleared, mineshafts held and years survived. Bandits raid a titled village harder.</p>`;
+  if (granted.length) h += `<p>${granted.map(c => `<b>${CHARTERS[c].name}</b> (${CHARTERS[c].effect})`).join(' · ')}</p>`;
+  if (left > 0) h += `<p>You may grant ${left} charter${left > 1 ? 's' : ''}:</p><div class="btnrow wrap">${CHARTERS.map((c, i) => granted.includes(i) ? '' : `<button class="pbtn" data-act="realm:5:${i}" title="${c.effect}">${c.name}</button>`).join('')}</div>`;
+  h += `</div><div class="act-sec"><h3>Focus</h3><p>${focus ? `<b>${FOCI[focus].name}</b> for ${focusDays} more day${focusDays === 1 ? '' : 's'}: ${FOCI[focus].effect}.` : 'None now. Every twelve days your reeve proposes a few.'}</p></div>`;
+  h += `<div class="act-sec"><h3>Soldiers' pay</h3><p>${resIcon(GOLD)} <b>${pay}</b> a day for ${home} at home and ${field} out (one coin for three at home, one for two out). An empty chest loses a deserter a day.</p></div>`;
+  return h;
+}
+/** What a house needs to be content and to grow (see realm.rs). */
+function houseNeedsHtml(tier: number): string {
+  const n = Array.from(lv.world.house_needs()), names = ['A second food besides grain (bread, fish or meat)', 'A market', 'A chapel', 'Tools in store', 'A well'];
+  const rows = names.map((name, i) => ({ name, from: n[i], have: n[5 + i] > 0 })).filter(x => x.from <= tier + 1);
+  if (!rows.length) return '';
+  return `<div><h3>Needs</h3>${rows.map(x => `<p>${x.have ? '<b>Met:</b>' : '<b class="bad">Missing:</b>'} ${x.name}${x.from > tier ? ' <span class="muted">(to grow)</span>' : ''}</p>`).join('')}<p class="muted">Unmet needs cost happiness; a house grows only when the needs of its next tier are met.</p></div>`;
+}
+
 function productionProblemsHtml(idx: number): string {
   const w = lv.world, f = w.buildings_flat(), kind = f[idx * 10], status = f[idx * 10 + 6];
   if (!defs[kind]?.cycle) return '';
@@ -3013,6 +3037,8 @@ function updateSelection() {
   html += `<div><div class="eyebrow">${burning ? `${icon('fire', 16)} On fire!` : 'Condition'} · <b>${Math.ceil(hp[selectedIdx * 3])} / ${Math.round(hp[selectedIdx * 3 + 1])} hp</b></div><div class="bar ${health < 0.4 || burning ? 'red' : ''}"><i style="width:${Math.round(health * 100)}%"></i></div></div>`;
   html += reachHtml(kind, tier);
   html += productionProblemsHtml(selectedIdx);
+  if (kind === 15) html += realmHtml();
+  if (kind === 0) html += houseNeedsHtml(tier);
   let repairHtml = '';   // damaged: offer repairs (shown with the other actions, below what the building does)
   if (health < 0.995 && !burning) {
     const rc = w.repair_cost(selectedIdx), rcost: [number, number][] = []; for (let i = 0; i < rc.length; i += 2) rcost.push([rc[i], rc[i + 1]]);
@@ -3276,6 +3302,12 @@ function onAct(a: string) {
   if (a === 'wk:overview') { ui.openWork(); return; }
   if (a === 'people:work' && selectedIdx !== null) { ui.openVillagers(selectedIdx); return; }
   if (a.startsWith('place:')) { placeAct(a); return; }
+  if (a.startsWith('realm:')) {   // a decree or a charter (see realm.rs)
+    const [, act, val] = a.split(':').map(Number), code = lv.world.realm_act(act, val);
+    if (code === 0) { commit({ op: 'realm', kind: act, idx: val }); afterLocalChange(); updateHud(); if (act === 5) ui.toast(`${CHARTERS[val].name} granted: ${CHARTERS[val].effect}.`, 'good'); }
+    else ui.toast(code === -2 ? 'Rise to a higher title to grant another charter.' : 'That cannot be decreed.', 'bad');
+    updateSelection(); return;
+  }
   if (selectedPlace !== null && a === 'deselect') { selectPlace(null); return; }
   if (selectedRuin !== null) {
     if (a === 'deselect') { selectRuin(null); return; }
@@ -3376,6 +3408,7 @@ function onAct(a: string) {
     const road = w.buildings_flat()[selectedIdx * 10] === 37, code = road ? w.upgrade_road(selectedIdx) : w.upgrade(selectedIdx);
     if (code === 0) { const f = w.buildings_flat(), o = selectedIdx * 10; commit(road ? { op: 'upgrade', idx: selectedIdx, kind: 1 } : { op: 'upgrade', idx: selectedIdx }); ui.toast('Building upgraded.', 'good'); sound.upgrade(); placedFx(f[o], f[o + 2], f[o + 3], true); }
     else if (code === -3) { ui.toast('Not enough room to grow: demolish the buildings in the way (hover Upgrade to see them).', 'bad'); sound.error(); }
+    else if (code === -31) { ui.toast(PLACE_ERRORS[-31], 'bad'); sound.error(); }
     afterLocalChange(selectedIdx ?? undefined);
   } else if (a === 'demolish') {
     if (w.demolish(selectedIdx)) { const f = w.buildings_flat(); void f; commit({ op: 'demolish', idx: selectedIdx }); sound.demolish(); selectedIdx = null; afterLocalChange(); rig.shake(0.25); }
