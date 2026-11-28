@@ -35,6 +35,8 @@ export class ShadowRefresh {
 
 /** Physically based sky, sun light with shadows, image-based lighting and fog. */
 // fixed colours used by setClock (allocated once rather than on every clock step)
+/** Exposure by day, for the neutral tone curve and grade in look.ts (ACES wanted 0.72 and still greyed the colours). */
+export const EXPOSURE = 0.92;
 const MOON = new THREE.Color(0.5, 0.6, 1.0), NIGHT_SKY = new THREE.Color(0.35, 0.44, 0.72), NIGHT_FOG = new THREE.Color(0.04, 0.06, 0.13);
 
 export class Atmosphere {
@@ -89,13 +91,13 @@ export class Atmosphere {
     const lightElev = elev > 3 ? elev : 3 + (3 - elev) * 0.5;   // below the horizon the moon stands in, rising as the sun sinks
     this.sunDir.setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - Math.min(lightElev, 70)), THREE.MathUtils.degToRad(az));
     const warm = 1 - Math.min(1, Math.max(0, elev) / 40);
-    this.sun.color.setRGB(1, 0.93 - warm * 0.22, 0.82 - warm * 0.4).lerp(MOON, n);
+    this.sun.color.setRGB(1, 0.965 - warm * 0.2, 0.9 - warm * 0.38).lerp(MOON, n);   // whiter than ACES needed: the neutral curve keeps the tint, and pale walls went yellow
     this.sun.intensity = (1.9 + (1 - warm) * 0.8) * (1 - n) + 0.55 * n;
     this.hemi.intensity = 0.42 * (1 - n) + 0.24 * n; this.hemi.color.setRGB(0.66, 0.77, 0.93).lerp(NIGHT_SKY, n);
     const f = this.fogCol.setRGB(0.58 + warm * 0.2, 0.67 - warm * 0.1, 0.78 - warm * 0.2).lerp(NIGHT_FOG, n);
     (this.scene.fog as THREE.FogExp2).color.copy(f);
     this.scene.environmentIntensity = 0.4 * (1 - n) + 0.12 * n;
-    this.renderer.toneMappingExposure = 0.72 + 0.3 * n;   // a little brighter at night, so a dark scene stays readable
+    this.renderer.toneMappingExposure = EXPOSURE + 0.35 * n;   // a little brighter at night, so a dark scene stays readable
   }
 
   /** Shadow quality from the display settings: a map size, or 0 for no shadows at all. */

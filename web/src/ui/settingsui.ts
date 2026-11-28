@@ -21,6 +21,8 @@ const ROWS: { sec: 'display' | 'game' | 'controls'; title: string; rows: Row[] }
     { key: 'antialias', label: 'Smooth edges (anti-aliasing)', hint: 'Removes jagged edges. Changing it needs a reload of the page.', kind: 'toggle' },
     { key: 'shadows', label: 'Shadows', hint: 'Shadow quality. Off is the biggest single speed-up.', kind: 'select', options: [['0', 'Off'], ['1024', 'Low'], ['2048', 'Medium'], ['4096', 'High']] },
     { key: 'waterFx', label: 'Glossy water', hint: 'Reflective water surface.', kind: 'toggle' },
+    { key: 'ambientOcclusion', label: 'Soft contact shadows', hint: 'Shade where things meet: under eaves, between houses, at the foot of walls and trees. Costs the graphics card.', kind: 'toggle' },
+    { key: 'glow', label: 'Glow', hint: 'A soft glow around lit windows, fires and sunlit snow.', kind: 'toggle' },
   ] },
   { sec: 'display', title: 'World', rows: [
     { key: 'trees', label: 'Trees', hint: 'Forests. Without them the land is bare but much faster.', kind: 'toggle' },

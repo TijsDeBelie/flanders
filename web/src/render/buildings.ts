@@ -7,6 +7,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { PEN_HALF_DEPTH, PEN_HALF_WIDTH } from '../pasture';
 import { makeBoat } from './field';
 import { tileableNoise } from './water';
+import { painted, PAINTERS } from './painted';
 
 // ---------- procedural textures & materials ----------
 const TILE = 2; // one texture repeat covers 2 world units
@@ -20,7 +21,6 @@ function tex(paint: (g: CanvasRenderingContext2D, s: number) => void, s = 256) {
 const speckle = (g: CanvasRenderingContext2D, s: number, n: number, a: number) => {
   for (let i = 0; i < n; i++) { const v = Math.random() > 0.5 ? 255 : 0; g.fillStyle = `rgba(${v},${v},${v},${Math.random() * a})`; g.fillRect(Math.random() * s, Math.random() * s, 1 + Math.random() * 2, 1 + Math.random() * 2); }
 };
-const fract = (n: number) => n - Math.floor(n);
 const wave = (n: number) => Math.cos(n * Math.PI * 2);
 type Grain = (u: number, v: number, wear: number, grit: number) => number;
 
@@ -39,42 +39,6 @@ function grainTile(colour: [number, number, number], grain: Grain) {
   });
 }
 
-const timberGrain: Grain = (u, v, wear, grit) => {
-  const plank = u * 6, along = fract(plank);
-  const seam = 1 - Math.min(1, Math.min(along, 1 - along) * 26);
-  const crown = Math.max(0, 1 - Math.abs(along - 0.07) * 15);
-  const drift = wear * 0.46 + 0.28 * wave(v * 2 + u * 4);
-  const fibres = wave(u * 54 + drift) * 0.06 + wave(u * 103 - drift * 1.4) * 0.028;
-  const board = [0.035, -0.055, 0.08, -0.03, -0.075, 0.035][Math.floor(plank)];
-  return 1 + board + fibres + wear * 0.20 + grit * 0.075 - seam * 0.27 + crown * 0.09;
-};
-
-const thatchGrain: Grain = (u, v, wear, grit) => {
-  const course = fract(v * 3 + 0.04 * wave(u * 5) + 0.12 * wear);
-  const overlap = 1 - Math.min(1, course * 8);
-  const straw = wave(u * 63 + 0.30 * wave(v * 2 + u * 3) + wear * 0.5);
-  return 1 + 0.2 * wear + 0.075 * straw + 0.07 * grit - 0.19 * overlap;
-};
-
-const tileGrain: Grain = (u, v, wear, grit) => {
-  const row = v * 6;
-  const across = fract(u * 6 + (Math.floor(row) % 2) * 0.5);
-  const edge = Math.min(across, 1 - across);
-  const lip = 1 - Math.min(1, fract(row - 0.11 * (1 - (2 * across - 1) ** 2)) * 7);
-  const joint = 1 - Math.min(1, edge * 27);
-  return 1 + wear * 0.24 + 0.09 * wave(across - 0.5) - 0.24 * lip - 0.19 * joint + grit * 0.13;
-};
-function rows(g: CanvasRenderingContext2D, s: number, base: string, lines: string, rowsN: number, stagger: boolean, cols: number, jitter = 18) {
-  g.fillStyle = base; g.fillRect(0, 0, s, s);
-  const rh = s / rowsN, cw = s / cols;
-  for (let r = 0; r < rowsN; r++) for (let c = -1; c < cols; c++) {
-    const off = stagger && r % 2 ? cw / 2 : 0, v = Math.random() * jitter - jitter / 2;
-    g.fillStyle = `rgba(${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${Math.abs(v) / 90})`;
-    g.fillRect(c * cw + off, r * rh, cw, rh);
-    g.strokeStyle = lines; g.lineWidth = 2; g.strokeRect(c * cw + off, r * rh, cw, rh);
-  }
-  speckle(g, s, 500, 0.12);
-}
 /** Derive a tangent-space normal map from a painted texture: dark mortar, grooves and gaps become recesses, light parts stand proud. */
 function normalFrom(c: HTMLCanvasElement, strength: number) {
   const s = c.width, src = c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, s, s).data, h = new Float32Array(s * s);
@@ -93,34 +57,24 @@ let _m: ReturnType<typeof makeMats> | null = null;
 function makeMats() {
   const std = (map: THREE.Texture | null, extra: THREE.MeshStandardMaterialParameters = {}) => new THREE.MeshStandardMaterial({ map, normalMap: map ? normalFrom(map.userData.canvas, 3.2) : null, normalScale: new THREE.Vector2(1, 1), vertexColors: true, roughness: 0.92, metalness: 0, ...extra });
   const col = (c: number, extra: THREE.MeshStandardMaterialParameters = {}) => new THREE.MeshStandardMaterial({ color: c, vertexColors: true, roughness: 0.9, ...extra });
+  // the walls and roofs: hand-painted, piece by piece (see painted.ts)
+  const pt = (name: keyof typeof PAINTERS, extra: THREE.MeshStandardMaterialParameters = {}) => { const t = painted(name); return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normal, normalScale: new THREE.Vector2(1, 1), vertexColors: true, roughness: 0.92, metalness: 0, ...extra }); };
   return {
-    wood: std(grainTile([124, 91, 59], timberGrain), { normalScale: new THREE.Vector2(0.65, 0.65) }),
-    darkwood: std(grainTile([77, 56, 38], timberGrain), { normalScale: new THREE.Vector2(0.65, 0.65) }),
-    plaster: std(tex((g, s) => { g.fillStyle = '#e4d6b4'; g.fillRect(0, 0, s, s); speckle(g, s, 1400, 0.16); for (let i = 0; i < 20; i++) { g.fillStyle = 'rgba(120,100,60,.05)'; g.beginPath(); g.arc(Math.random() * s, Math.random() * s, 8 + Math.random() * 14, 0, 7); g.fill(); } })),
-    // half-timbered panel: oak frame, diagonal brace and plaster infill (one panel per texture tile)
-    timber: std(tex((g, s) => {
-      g.fillStyle = '#e8dcbf'; g.fillRect(0, 0, s, s); speckle(g, s, 900, 0.14);
-      g.strokeStyle = '#4a3220'; g.lineCap = 'square';
-      g.lineWidth = 11; g.strokeRect(5, 5, s - 10, s - 10);
-      g.lineWidth = 7; g.beginPath(); g.moveTo(s / 2, 4); g.lineTo(s / 2, s - 4); g.stroke();
-      g.lineWidth = 6; g.beginPath(); g.moveTo(6, s - 6); g.lineTo(s / 2 - 3, s * 0.45); g.moveTo(s - 6, s - 6); g.lineTo(s / 2 + 3, s * 0.45); g.stroke();
-    })),
-    // Flemish brickwork with pale stone bands
-    flemish: std(tex((g, s) => {
-      rows(g, s, '#a8553a', 'rgba(60,30,22,.8)', 8, true, 5, 55);
-      for (const y of [s * 0.25, s * 0.75]) { g.fillStyle = '#d8cfba'; g.fillRect(0, y - 4, s, 8); g.fillStyle = 'rgba(60,50,40,.35)'; g.fillRect(0, y + 4, s, 1.5); }
-      speckle(g, s, 400, 0.12);
-    })),
-    mud: std(tex((g, s) => { g.fillStyle = '#a58a62'; g.fillRect(0, 0, s, s); speckle(g, s, 1800, 0.25); for (let i = 0; i < 14; i++) { g.fillStyle = 'rgba(80,60,35,.12)'; g.beginPath(); g.arc(Math.random() * s, Math.random() * s, 6 + Math.random() * 14, 0, 7); g.fill(); } })),
-    cobble: std(tex((g, s) => { g.fillStyle = '#6f6b64'; g.fillRect(0, 0, s, s); for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { const v = 120 + Math.random() * 70; g.fillStyle = `rgb(${v},${v - 4},${v - 10})`; g.beginPath(); g.ellipse(x * s / 8 + s / 16 + (y % 2) * s / 16, y * s / 8 + s / 16, s / 18, s / 22, 0, 0, 7); g.fill(); } })),
+    wood: pt('wood', { normalScale: new THREE.Vector2(0.8, 0.8) }),
+    darkwood: pt('darkwood', { normalScale: new THREE.Vector2(0.8, 0.8) }),
+    plaster: pt('plaster'),
+    timber: pt('timber'),
+    flemish: pt('flemish'),
+    mud: pt('mud'),
+    cobble: pt('cobble'),
     stoneMat: col(0xbdb4a0),
     shutter: col(0x3f6a4a), shutterRed: col(0x8a2f26), shutterBlue: col(0x2f4f7a),
-    stone: std(tex((g, s) => rows(g, s, '#9a968d', 'rgba(50,48,44,.7)', 5, true, 4, 40))),
-    darkstone: std(tex((g, s) => rows(g, s, '#6e6c68', 'rgba(25,25,25,.7)', 5, true, 4, 40))),
-    brick: std(tex((g, s) => rows(g, s, '#a4553b', 'rgba(70,35,25,.8)', 8, true, 5, 50))),
-    thatch: std(grainTile([184, 153, 82], thatchGrain), { normalScale: new THREE.Vector2(0.58, 0.58) }),
-    tile: std(grainTile([170, 85, 54], tileGrain)),
-    slate: std(grainTile([81, 92, 107], tileGrain)),
+    stone: pt('stone'),
+    darkstone: pt('darkstone'),
+    brick: pt('brick'),
+    thatch: pt('thatch', { normalScale: new THREE.Vector2(0.75, 0.75) }),
+    tile: pt('tile'),
+    slate: pt('slate'),
     trampled: std(grainTile([96, 75, 56], (_u, _v, wear, grit) => 0.96 + 0.62 * wear + 0.25 * grit)),
     wallow: std(grainTile([85, 68, 54], (u, v, wear, grit) => 0.97 + 0.43 * wear + 0.10 * grit + 0.05 * wave(u * 2 - v * 3)), { roughness: 0.67 }),
     field: std(tex((g, s) => { g.fillStyle = '#7b8c3e'; g.fillRect(0, 0, s, s); for (let i = 0; i < 10; i++) { g.fillStyle = i % 2 ? 'rgba(180,170,70,.55)' : 'rgba(80,60,30,.35)'; g.fillRect(0, i * s / 10, s, s / 10 - 3); } speckle(g, s, 500, 0.15); }), { roughness: 1 }),

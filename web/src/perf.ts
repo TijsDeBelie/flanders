@@ -90,12 +90,12 @@ export class Perf {
   private net: string[] = [];
 
   /** Render with timing. While profiling, the layer costs are measured as the time between frames (see `frame`), which includes the GPU and the browser: on phones the render call alone says little. */
-  render(renderer: THREE.WebGLRenderer, scene: THREE.Scene, cam: THREE.Camera) {
+  render(renderer: THREE.WebGLRenderer, draw: () => void) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     let q: any = null;
     if (this.ext && !this.profiling && !this.pending.length) { q = gl.createQuery(); gl.beginQuery(this.ext.TIME_ELAPSED_EXT, q); }
     const t0 = performance.now();
-    renderer.render(scene, cam);
+    draw();
     if (this.profiling) gl.finish();
     const ms = performance.now() - t0;
     this.renderMs = this.renderMs * 0.9 + ms * 0.1;

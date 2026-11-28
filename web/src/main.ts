@@ -40,6 +40,8 @@ import { SHAPES, isFigure, figureOutline, samplePath, snap45, rotOf, closesPath,
 import { WorldShips } from './render/ships';
 import { Terrain, HALF, STEP, NV } from './render/terrain';
 import { Atmosphere } from './render/sky';
+import { installGrade, gradeInstalled } from './render/look';
+import { PostChain } from './render/post';
 import { CameraRig } from './render/camera';
 import { Forest } from './render/trees';
 import { buildModel, Effects, type BuildingModel, type VillageView } from './render/buildings';
@@ -171,6 +173,8 @@ let worldName = 'flanders', seedBig = 1n, started = false;
 let pveMode = false;
 /** Computer villages are present in every game, shared worlds included (they are simulated on this computer only; other players do not see them). */
 let computerVillages = false;
+installGrade();   // the colour grade goes into the shader library before any material compiles (see render/look.ts)
+let post!: PostChain;
 let renderer!: THREE.WebGLRenderer, scene!: THREE.Scene, terrain!: Terrain, forest!: Forest, atmo!: Atmosphere, rig!: CameraRig;
 let bigMap!: Minimap;
 let penPreview!: PenPreview;
@@ -1693,7 +1697,7 @@ async function startGame(name: string, username: string, pve = false) {
   if (softwareGpu) ui.toast(!autoLow ?'No graphics card is drawing the game (the browser draws it on the processor): the Low display preset runs much faster.' : 'No graphics card is drawing the game, so it starts on Low display settings. Change them under Settings.', 'info');
   renderer.setPixelRatio(pixelRatio(devicePixelRatio, 1)); renderer.setSize(viewW(), viewH());
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap; renderer.shadowMap.autoUpdate = false;   // Atmosphere schedules shadow redraws
-  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.72;
+  renderer.toneMapping = gradeInstalled() ? THREE.CustomToneMapping : THREE.NeutralToneMapping;   // exposure: set by the Atmosphere for the time of day
   scene = new THREE.Scene(); scene.matrixAutoUpdate = false;   // the scene itself never moves: with its matrix 'dirty' every frame, every object below was re-multiplied every frame
   ui.progress(10, 'Painting the sky…'); await nextFrame();
   atmo = new Atmosphere(scene, renderer);
@@ -1704,6 +1708,7 @@ async function startGame(name: string, username: string, pve = false) {
   scene.add(terrain.mesh, terrain.water, terrain.riverWater);
   tunnels = new Tunnels(terrain, tunnels_flat(seedBig)); scene.add(tunnels.group);
   rig = new CameraRig(ui.canvas, terrain, e => touchPreviewHit(e) || (selectedKind !== null && !!PEN_SPACING[selectedKind] && penShape !== 'path'));
+  post = new PostChain(renderer, scene, rig.cam, wantAntialias(devicePixelRatio) ? 4 : 0);   // image effects (render/post.ts): off until the settings switch them on
   ui.progress(38, 'Planting the forests…'); await nextFrame();
   const treeRows = trees_in_row_count(-HALF, HALF);
   const treeData = await collectInSlices(treeRows, (a, b) => trees_in_rows(seedBig, -HALF, -HALF, HALF, a, b), 4, { onProgress: f => ui.progress(38 + Math.round(f * 8), 'Planting the forests…') });
@@ -1841,7 +1846,7 @@ async function warmUp() {
   for (let i = 0; i < 4; i++) {
     rig.update(0.016); rig.cam.updateMatrixWorld(true); atmo.follow(rig.target); forest.setLight(atmo.lightDirection, atmo.sun, atmo.hemi); forest.tick(0, rig.cam.position, rig.target, settings().shadows ? 135 : 0, rig.cam);
     crowd.begin(); lv.draw(crowd, rig.target.x, rig.target.z, view, rig.cam.position, Infinity); crowd.end();
-    renderer.shadowMap.needsUpdate = true; renderer.render(scene, rig.cam);   // the first frames compile and fill the shadow map
+    renderer.shadowMap.needsUpdate = true; drawScene();   // the first frames compile and fill the shadow map (and the image effects' shaders)
     (renderer.getContext() as WebGL2RenderingContext).finish();
     ui.progress(86 + i * 3, i < 3 ? 'Baking shadows…' : 'Almost ready…'); await nextFrame();
   }
@@ -4090,7 +4095,7 @@ function bindInput() {
       case 'commandScreen': if (lv.world.battle_active()) { commandScreen().toggle(); battleBanner(); } break;
       case 'fullMap': ui.toggleMap(); break;
       case 'fullscreen': e.preventDefault(); toggleFullscreen(); break;
-      case 'photo': e.preventDefault(); togglePhotoMode(renderer.domElement, () => perf.render(renderer, scene, rig.cam), t => ui.toast(t, 'info')); break;
+      case 'photo': e.preventDefault(); togglePhotoMode(renderer.domElement, () => perf.render(renderer, drawScene), t => ui.toast(t, 'info')); break;
       case 'musterAll': { const a = Array.from(lv.world.army()).slice(0, 6); if (a.some(n => n > 0)) doMuster(a, true); else if (lv.field.ids().length) selectDets(lv.field.ids()); else ui.toast('There are no soldiers available to muster.', 'info'); break; }
       case 'toggleMinimap': ui.toggleMinimap(); break;
       default: break;
@@ -4227,10 +4232,13 @@ const effectView = new EffectView();
 let lastPhase = -1;   // the day phase the light was last set for
 let last = 0, miniT = 0, scareT = 0, scares: { x: number; z: number }[] = [];
 let forestShadowVersion = -1;
+/** Draw the scene: through the image effects when any is on, else straight to the screen. */
+const drawScene = () => { if (post.active) post.render(); else renderer.render(scene, rig.cam); };
 /** Put the display settings into effect (at start, and whenever one changes). */
 function applySettings(s: Settings) {
   renderer.setPixelRatio(pixelRatio(devicePixelRatio, resScale));
   atmo.setShadows(s.shadows);
+  post.configure({ ambientOcclusion: s.ambientOcclusion, glow: s.glow });
   forest.drawDistance = s.drawDistance; forest.detail = s.treeDetail; forest.group.visible = s.trees && !showroom;
   atmo.invalidateShadows();
   for (const wm of [terrain.water.material as THREE.MeshPhysicalMaterial, terrain.riverMaterial]) { const gloss = s.waterFx ? 1 : 0; if (wm.clearcoat !== gloss) { wm.clearcoat = gloss; wm.envMapIntensity = s.waterFx ? 1.8 : 0.6; wm.needsUpdate = true; } }
@@ -4471,7 +4479,7 @@ function frame(now: number) {
   perf.stop('labels + minimap');
   perf.start('render (CPU side)');
   if (atmo.updateShadows(now, rig.target, rig.dist, drawCrowd && (speed > 0 || wildlife.visible > 0))) perf.tally('shadow redraws');
-  perf.render(renderer, scene, rig.cam);
+  perf.render(renderer, drawScene);
   perf.stop('render (CPU side)');
   lastBusyMs = performance.now() - frameAt;
   if (perf.open && now - noteT > 500) { noteT = now; perf.netNotes(syncNotes()); }
@@ -4489,7 +4497,7 @@ function debugPlace(kind: number, dx: number, dy: number, r = 0) {
 }
 if (DEBUG_HOOKS) (window as any).__game = {
   get worldShips() { return worldShips; }, startReplay, stopReplay, get replay() { return replay; }, debugPlace, runModelVillage, selectBuilding, toggleMulti, selectWallRun, selectRuin, KIND_ICON, setSpeed, selectKind, frame, updateGhost,
-  get renderer() { return renderer; }, get forest() { return forest; }, get atmo() { return atmo; }, get scene() { return scene; }, get terrain() { return terrain; }, get rig() { return rig; },
+  get renderer() { return renderer; }, get forest() { return forest; }, get atmo() { return atmo; }, get post() { return post; }, toggleShowroom, get scene() { return scene; }, get terrain() { return terrain; }, get rig() { return rig; },
   get perf() { return perf; }, get world() { return lv.world; }, get lv() { return lv; }, get rivals() { return rivals; }, get wildlife() { return wildlife; }, get fx() { return fx; }, get crowd() { return crowd; }, ui, afterLocalChange, refreshTerrain,
   /** (testing) run n whole ticks of the live game at once: your village and, in a PVE game, the computer's. */
   stepTicks(n: number) { for (let i = 0; i < n; i++) stepLocal(); lv.afterTick(); },

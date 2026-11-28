@@ -11,6 +11,8 @@ export interface Settings {
   treeDetail: boolean;               // rich trees near the camera
   trees: boolean;
   waterFx: boolean;                  // glossy water with reflections
+  ambientOcclusion: boolean;         // soft contact shadow where things meet (an image effect, see render/post.ts)
+  glow: boolean;                     // a gentle glow around the brightest light: lit windows, fires, sunlit snow
   particles: boolean;                // fire, smoke, dust, arrows
   crowds: boolean;                   // villagers, soldiers, animals
   googlyEyes: boolean;
@@ -25,10 +27,10 @@ export interface Settings {
 
 type Preset = Omit<Settings, 'quality' | 'antialias' | 'fpsCap' | 'showFps' | 'showPaths' | 'cameraSpeed' | 'uiScale' | 'jumpToRaiders' | 'pauseForRaids' | 'adaptive' | 'resolution' | 'googlyEyes'>;
 export const PRESETS: Record<Exclude<Quality, 'custom'>, Preset> = {
-  low:    { shadows: 0,    pixelCap: 1,    drawDistance: 450,  treeDetail: false, trees: true, waterFx: false, particles: true, crowds: true },
-  medium: { shadows: 1024, pixelCap: 1.25, drawDistance: 750,  treeDetail: false, trees: true, waterFx: true,  particles: true, crowds: true },
-  high:   { shadows: 2048, pixelCap: 1.5,  drawDistance: 1300, treeDetail: true,  trees: true, waterFx: true,  particles: true, crowds: true },
-  ultra:  { shadows: 4096, pixelCap: 2,    drawDistance: 2600, treeDetail: true,  trees: true, waterFx: true,  particles: true, crowds: true },
+  low:    { shadows: 0,    pixelCap: 1,    drawDistance: 450,  treeDetail: false, trees: true, waterFx: false, ambientOcclusion: false, glow: false, particles: true, crowds: true },
+  medium: { shadows: 1024, pixelCap: 1.25, drawDistance: 750,  treeDetail: false, trees: true, waterFx: true,  ambientOcclusion: false, glow: false, particles: true, crowds: true },
+  high:   { shadows: 2048, pixelCap: 1.5,  drawDistance: 1300, treeDetail: true,  trees: true, waterFx: true,  ambientOcclusion: true,  glow: true,  particles: true, crowds: true },
+  ultra:  { shadows: 4096, pixelCap: 2,    drawDistance: 2600, treeDetail: true,  trees: true, waterFx: true,  ambientOcclusion: true,  glow: true,  particles: true, crowds: true },
 };
 export const DEFAULTS: Settings = { quality: 'high', antialias: true, resolution: 1, adaptive: true, fpsCap: 0, showFps: false, showPaths: false, cameraSpeed: 1, uiScale: 1, jumpToRaiders: false, pauseForRaids: true, googlyEyes: false, ...PRESETS.high };
 
