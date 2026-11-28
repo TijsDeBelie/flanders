@@ -279,7 +279,7 @@ fn a_catapult_never_crosses_cliffs_water_or_buildings_on_a_long_march() {
             let f = w.det_flat(); let (x, y) = (f[1], f[2]);
             // not water (unless a bridge carries it), not a cliff, not inside a building
             let h = w.height_at(x, y);
-            let on_bridge = w.bridges_flat().chunks(4).any(|b| { let (dx, dy) = (b[2] - b[0], b[3] - b[1]); let l2 = (dx * dx + dy * dy).max(1e-6); let t = (((x - b[0]) * dx + (y - b[1]) * dy) / l2).clamp(0.0, 1.0); (x - (b[0] + dx * t)).hypot(y - (b[1] + dy * t)) < 2.5 });
+            let on_bridge = w.on_deck(x, y) || w.bridges_flat().chunks(4).any(|b| { let (dx, dy) = (b[2] - b[0], b[3] - b[1]); let l2 = (dx * dx + dy * dy).max(1e-6); let t = (((x - b[0]) * dx + (y - b[1]) * dy) / l2).clamp(0.0, 1.0); (x - (b[0] + dx * t)).hypot(y - (b[1] + dy * t)) < 2.5 });
             let ferrying = f[8] as u8 == march::S_FERRY || f[8] as u8 == march::S_BRIDGE;
             if !on_bridge && !ferrying { assert!(h > 0.1, "catapult in water at ({x:.1},{y:.1}) h {h}"); }
             let slope = [(2.5f32, 0.0f32), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5)].iter().map(|(dx, dy)| (w.height_at(x + dx, y + dy) - h).abs() / 2.5).fold(0.0, f32::max);

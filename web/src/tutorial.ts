@@ -23,8 +23,8 @@ export function fillKeys(text: string, label: (action: string) => string = a => 
 
 export const STEPS: Step[] = [
   { title: 'Welcome to Flanders', text: 'You rule a small village. This guide takes you from a few huts to a castle. Move the camera with {panUp} {panLeft} {panDown} {panRight}. Turn it with {rotLeft} and {rotRight}. Zoom with the wheel. Press Next to begin.' },
+  { title: 'Grain for the table', text: 'Food comes first: your stores will not last. Build a Farm on flat ground. Farms give less grain in winter.', done: c => c.n(1) >= 1, point: { sel: '#cards .card', has: 'Farm' } },
   { title: 'A home for new villagers', text: 'Build a House on flat ground. New villagers move in while there is room. Pick House on the right, then click the ground.', done: c => c.n(0) >= 1, point: { sel: '#cards .card', has: 'House' } },
-  { title: 'Grain for the table', text: 'Your food will not last. Build a Farm on flat ground. Farms give less grain in winter.', done: c => c.n(1) >= 1, point: { sel: '#cards .card', has: 'Farm' } },
   { title: 'Wood', text: 'Almost everything starts as wood. Build a Woodcutter next to a forest.', done: c => c.n(4) >= 1, point: { sel: '#cards .card', has: 'Woodcutter' } },
   { title: 'Planks', text: 'Better buildings need planks. Build a Sawmill. It turns wood into planks.', done: c => c.n(5) >= 1, point: { sel: '#cards .card', has: 'Sawmill' } },
   { title: 'Watch your stores', text: 'Open Food in the top bar. It shows how long your meals will last. Check food and firewood before each winter. Press Next when you have looked.', point: { sel: '#treasury' } },

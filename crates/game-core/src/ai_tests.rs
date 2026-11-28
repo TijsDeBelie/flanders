@@ -148,3 +148,16 @@ fn the_computer_uses_the_wild_places() {
     }
     assert!(used > 0, "the computers went out to the wild places");
 }
+
+
+#[test]
+fn the_computer_rules_takes_up_a_focus_and_grants_charters() {
+    let mut focused = 0; let mut events = 0;
+    for (seed, layout) in [(11u64, 0u32), (3, 2), (5, 5)] {
+        let mut w = World::new(seed, 0, 0); let mut ai = Ai::new(seed, 0, layout, 7);
+        for _ in 0..30 * DAY { w.step(); ai.step(&mut w); if w.realm.focus != 0 { focused += 1; } for e in w.take_events().chunks(4) { if e[0] == 19 && e[1] == crate::CH_FOCUS as i32 && e[2] != 0 { events += 1; } } }
+        assert!(w.realm.charters.len() <= w.realm.title as usize);
+        assert!(w.stock.iter().all(|&s| s >= 0));
+    }
+    assert!(events > 0 && focused > 0, "the computers took up a focus ({events} times)");
+}

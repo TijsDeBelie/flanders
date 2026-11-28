@@ -53,6 +53,7 @@ mod snapshot_tests;
 mod siege;
 mod terrain;
 mod wilds;
+mod realm;
 use catalog::*;
 use military::*;
 use terrain::{lerp, smoothstep, Deposit};
@@ -188,7 +189,8 @@ const EV_CHOICE: i32 = 18;
 pub const FOG_N: i32 = 60;
 pub const FOG_CELL: f32 = 40.0;
 const EV_VISIT: i32 = 20;
-const EV_WILD: i32 = 29;   // a wild place changed: a = what (see wilds::WILD_*), b = the place
+const EV_WILD: i32 = 29;
+const EV_REALM: i32 = 30;  // how the village is ruled: a = what (see realm::R_*), b = a number   // a wild place changed: a = what (see wilds::WILD_*), b = the place
 const EV_HERO: i32 = 21;
 const EV_MIASMA: i32 = 22;
 const EV_SERVICE: i32 = 23;
@@ -219,6 +221,7 @@ pub const CH_PLAGUE: u8 = 0;
 pub const CH_PREACHER: u8 = 1;
 pub const CH_NOBLE: u8 = 2;
 pub const CH_WINTER: u8 = 3;
+pub const CH_FOCUS: u8 = 4;   // the reeve proposes a focus for the village (see realm.rs)
 /// Days the player has to decide before the cautious default (the last option) is taken.
 const CHOICE_DAYS: u64 = 2;
 /// Ticks in a day, days in a season (the interface uses the same numbers).
@@ -252,6 +255,8 @@ pub const FOODS: [(u8, i32); 4] = [(GR, 3), (FI, 4), (BD, 6), (SF, 6)];
 const LUXURY_EVERY: u64 = 10;
 const LUXURY_HEADS: u32 = 20;
 const LUXURY_HAPPY: i32 = 6;
+/// Grain in the stores at the start: enough that a hall, a house and a farm never run dry before the first harvests come in (it was 120: see docs/REVIEW-2026-11-28.md).
+const START_GRAIN: i32 = 360;
 const HALF_F: f32 = terrain::HALF;
 pub const SEASON_DAYS: u64 = 10;
 /// How far out from a waterwheel house's middle its wheel hangs (the model's axle), and the highest the house's pad may stand so the wheel reaches the water.
@@ -423,10 +428,12 @@ pub struct World {
     #[serde(skip)] vets: [u32; NK],       // veterans among the standing army, by kind (they came through a battle: see tactics::is_veteran); saved with the extras of snapshot layout 9
     #[serde(skip)] train_acc: [u32; NK],  // drill progress of each kind in the queue (the barracks train every queued kind at once)
     #[serde(skip)] last_battle_frame: Vec<f32>,
-    #[serde(skip)] wilds: wilds::Wilds,   // camps that come back, abbeys, mineshafts (see wilds.rs): saved in snapshot layout E, part of the state hash
+    #[serde(skip)] wilds: wilds::Wilds,
+    #[serde(skip)] realm: realm::Realm,   // decrees, charters, titles, focus (see realm.rs): saved in snapshot layout F, part of the state hash   // camps that come back, abbeys, mineshafts (see wilds.rs): saved in snapshot layout E, part of the state hash
 }
 
 /// Start of every world snapshot: a name and the layout version. Bump the version when a field of the world is added, removed or changes type (a snapshot of another layout is refused).
+const REALM_SNAP_MAGIC: &[u8; 8] = b"FLWORLDF";
 const WILDS_SNAP_MAGIC: &[u8; 8] = b"FLWORLDE";
 const RALLY_SNAP_MAGIC: &[u8; 8] = b"FLWORLDD";
 const GUESTS_SNAP_MAGIC: &[u8; 8] = b"FLWORLDC";
@@ -458,13 +465,14 @@ pub fn world_restore(bytes: &[u8]) -> Option<World> {
     let mut allies: Vec<i32> = vec![];
     let mut rally: [Option<(f32, f32)>; 2] = [None; 2];
     let mut wilds: Option<wilds::Wilds> = None;
-    let (mut w, marches) = if magic == WILDS_SNAP_MAGIC || magic == RALLY_SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == SNAP_MAGIC || magic == SIEGE_SNAP_MAGIC || magic == EXTRAS_SNAP_MAGIC || magic == VETS_SNAP_MAGIC || magic == TOOLS_SNAP_MAGIC || magic == ESTATE_SNAP_MAGIC || magic == OBJECTIVE_SNAP_MAGIC || magic == TACTICS_SNAP_MAGIC {
+    let mut realm: Option<realm::Realm> = None;
+    let (mut w, marches) = if magic == REALM_SNAP_MAGIC || magic == WILDS_SNAP_MAGIC || magic == RALLY_SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == SNAP_MAGIC || magic == SIEGE_SNAP_MAGIC || magic == EXTRAS_SNAP_MAGIC || magic == VETS_SNAP_MAGIC || magic == TOOLS_SNAP_MAGIC || magic == ESTATE_SNAP_MAGIC || magic == OBJECTIVE_SNAP_MAGIC || magic == TACTICS_SNAP_MAGIC {
         type TacticalState = (World, Vec<march::SavedMarch>, u16, bool, Option<tactics::Tactics>);
         type ObjectiveState = (TacticalState, Option<raid_objective::RaidObjective>);
         let (((state, estate), tools), planted): (((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>) =
-            if magic == SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == RALLY_SNAP_MAGIC || magic == WILDS_SNAP_MAGIC {
+            if magic == SNAP_MAGIC || magic == GUESTS_SNAP_MAGIC || magic == RALLY_SNAP_MAGIC || magic == WILDS_SNAP_MAGIC || magic == REALM_SNAP_MAGIC {
                 type Body = (((((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>), ([u32; NK], [u32; NK])), (Option<siege::Siege>, Option<plague::Camp>));
-                let ((inner, ex), (sg, cp)): Body = if magic == WILDS_SNAP_MAGIC { let (((body, a), r), wl): (((Body, Vec<i32>), [Option<(f32, f32)>; 2]), wilds::Wilds) = bincode::deserialize(payload).ok()?; allies = a; rally = r; wilds = Some(wl); body } else if magic == RALLY_SNAP_MAGIC { let ((body, a), r): ((Body, Vec<i32>), [Option<(f32, f32)>; 2]) = bincode::deserialize(payload).ok()?; allies = a; rally = r; body } else if magic == GUESTS_SNAP_MAGIC { let (body, a): (Body, Vec<i32>) = bincode::deserialize(payload).ok()?; allies = a; body } else { bincode::deserialize(payload).ok()? };
+                let ((inner, ex), (sg, cp)): Body = if magic == REALM_SNAP_MAGIC { let ((((body, a), r), wl), rl): ((((Body, Vec<i32>), [Option<(f32, f32)>; 2]), wilds::Wilds), realm::Realm) = bincode::deserialize(payload).ok()?; allies = a; rally = r; wilds = Some(wl); realm = Some(rl); body } else if magic == WILDS_SNAP_MAGIC { let (((body, a), r), wl): (((Body, Vec<i32>), [Option<(f32, f32)>; 2]), wilds::Wilds) = bincode::deserialize(payload).ok()?; allies = a; rally = r; wilds = Some(wl); body } else if magic == RALLY_SNAP_MAGIC { let ((body, a), r): ((Body, Vec<i32>), [Option<(f32, f32)>; 2]) = bincode::deserialize(payload).ok()?; allies = a; rally = r; body } else if magic == GUESTS_SNAP_MAGIC { let (body, a): (Body, Vec<i32>) = bincode::deserialize(payload).ok()?; allies = a; body } else { bincode::deserialize(payload).ok()? };
                 extras = ex; siege = Some(sg); camp = cp; inner }
             else if magic == SIEGE_SNAP_MAGIC { let ((inner, ex), sg): (((((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>), ([u32; NK], [u32; NK])), Option<siege::Siege>) = bincode::deserialize(payload).ok()?; extras = ex; siege = Some(sg); inner }
             else if magic == EXTRAS_SNAP_MAGIC { let (inner, ex): ((((ObjectiveState, estate::Estate), [u64; 2]), Vec<forestry::Planted>), ([u32; NK], [u32; NK])) = bincode::deserialize(payload).ok()?; extras = ex; inner }
@@ -510,6 +518,7 @@ pub fn world_restore(bytes: &[u8]) -> Option<World> {
     if rally.iter().flatten().any(|r| !r.0.is_finite() || !r.1.is_finite() || r.0.abs() > MAP_LIMIT || r.1.abs() > MAP_LIMIT) { return None; }
     w.rally = rally;
     if !allies.is_empty() { if allies.len() != w.dets.len() { return None; } for (det, a) in w.dets.iter_mut().zip(allies) { det.ally = a; } }
+    match realm { Some(rl) => { if !rl.valid() { return None; } w.realm = rl; } None => w.realm = realm::Realm::default() }
     match wilds { Some(wl) => { if !wl.valid(w.seed) { return None; } w.wilds = wl; } None => w.wilds = wilds::Wilds::new(w.seed) }   // (a village saved before the wild places came to life starts them fresh)
     w.ledger.ensure_kinds(DEFS.len());
     Some(w)
@@ -637,13 +646,13 @@ fn demolition_refund(kind: u8) -> impl Iterator<Item = Amount> {
 impl World {
     /// The whole state of the village as bytes (the caches are not in it: they are rebuilt on demand). `world_restore` turns it back into the same world, to the last bit.
     pub fn snapshot(&self) -> Vec<u8> {
-        let mut v = WILDS_SNAP_MAGIC.to_vec();
+        let mut v = REALM_SNAP_MAGIC.to_vec();
         let marches: Vec<_> = self.dets.iter().map(march::Det::save_march).collect();
         let battle = self.battle.as_ref();
         let tactical_state = (self, marches, self.military_tech, self.auto_bridge, battle.map(|b| &b.tactics));
         let objective_state = (tactical_state, battle.and_then(|b| b.objective));
         let allies: Vec<i32> = self.dets.iter().map(|d| d.ally).collect();   // (whose soldiers each field army is: 0 ours; see `host_guests`)
-        v.extend(bincode::serialize(&((((((((objective_state, self.estate), self.emergency_tools), &self.planted), (self.vets, self.train_acc)), (battle.map(|b| &b.siege), self.plague_camp)), allies), self.rally), &self.wilds)).expect("a world can be written"));
+        v.extend(bincode::serialize(&(((((((((objective_state, self.estate), self.emergency_tools), &self.planted), (self.vets, self.train_acc)), (battle.map(|b| &b.siege), self.plague_camp)), allies), self.rally), &self.wilds), &self.realm)).expect("a world can be written"));
         v
     }
 
@@ -652,13 +661,13 @@ impl World {
         let mut w = World {
             seed, ox, oy, tick: 0, rng: Rng(seed ^ 0x9E3779B97F4A7C15 ^ ((ox as i64 as u64) << 20) ^ (oy as i64 as u64)),
             buildings: vec![], deposits: terrain::deposits(seed), stock: [0; N_RES], population: 10, sick: 0, children: 3, elders: 0, born: 0, arrived: 0, enlisted: 0, left: 0, died: [0; 5], unburied: 0, buried: 0, graves_used: 0, devotion: 0, relations: vec![], married: vec![], last_envoy: vec![], market_sold: [0; market::MARKET_GOODS.len()], style: 0, hero: None, defer_roads: false, neutral_done: vec![], explored: vec![0; (FOG_N * FOG_N) as usize], choice: None, mood: 0, mood_until: 0, quarantine_until: 0, plague_start: 0, plague_end: 0, plague_camp: None, share_until: 0, caravans: vec![], journeys: vec![], arrivals: vec![], awaiting: vec![], delivered: vec![], treaties: vec![], warm: true, cold_days: 0, eff: 100, eff_first: 100, eff_rest: 100, jobs: 0,
-            events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], meal_credit: 0, emergency_tools: [0; 2], estate: estate::Estate { active: true, ..Default::default() }, ledger: ledger::Ledger::new(DEFS.len()), levels: vec![], flats: vec![], roads: vec![], road_links: vec![], road_tier: vec![], road_conn: vec![], military_tech: 0, auto_bridge: false, rally: [None; 2], vets: [0; NK], train_acc: [0; NK], last_battle_frame: vec![], wilds: wilds::Wilds::default(),
+            events: vec![], sites: terrain::sites(seed), flow: [0; N_RES], meal_credit: 0, emergency_tools: [0; 2], estate: estate::Estate { active: true, ..Default::default() }, ledger: ledger::Ledger::new(DEFS.len()), levels: vec![], flats: vec![], roads: vec![], road_links: vec![], road_tier: vec![], road_conn: vec![], military_tech: 0, auto_bridge: false, rally: [None; 2], vets: [0; NK], train_acc: [0; NK], last_battle_frame: vec![], wilds: wilds::Wilds::default(), realm: realm::Realm::default(),
             army: [0; NK], queue: [0; NK], train_prog: 0, away: [0; NK], battle: None, raid_warning_ticks: 0, raid_warning_angle: 0.0, raid_warning_rf: 0.0, raid_warning_boss: false, raid_warning_name: 0, wildfires: vec![], craters: vec![], scorch: vec![], ruins: vec![], shots: vec![], terrain_ver: 0, report: vec![], report_seq: 0, report_bought: false, greed: 0, dets: vec![], next_det: 0, felled: vec![], planted: vec![], groves: vec![], ov_cache: Default::default(), march_heights: Default::default(), march_routes: Default::default(), mem_cache: Default::default(), deposit_layout: Default::default(), links: vec![], moat_water: vec![], bridges: vec![], db_want: vec![], map_ver: 0, road_sig: 0, net_base: Default::default(), link_stamp: Default::default(), ground_cache: Default::default(), height_cache: Default::default(),
         };
         w.stock[W as usize] = 160;
         w.stock[PL as usize] = 20;
         w.stock[ST as usize] = 70;
-        w.stock[GR as usize] = 120;
+        w.stock[GR as usize] = START_GRAIN;
         w.stock[TL as usize] = 6;
         w.stock[GD as usize] = 30;
         let (x, y) = (ox as f32, oy as f32);
@@ -1007,6 +1016,7 @@ impl World {
         let soldiers = self.army.iter().chain(&self.away).chain(self.dets.iter().flat_map(|d| &d.units)).copied().sum::<u32>() + self.garrisoned();   // (the garrisons of the mineshafts eat too)
         let heads = (self.population + soldiers) as i32;
         let units = if self.estate.active { heads * 2 } else { (heads + 5) / 10 * 4 };
+        let units = units * self.ration_pct() / 100;   // (the rations decree: see realm.rs)
         (soldiers, units)
     }
     /// Take items from the fullest food store. False if it takes the entire larder and still comes up short.
@@ -1780,6 +1790,25 @@ impl World {
         self.after_change();
         (self.buildings.len() - 1) as i32
     }
+    /// An army has bridged the water from (ax, ay) to (bx, by): the village gets a real bridge there, the same building the player builds (drawn, walked and
+    /// routed over by villagers, armies and raiders alike, joined by roads, and selectable, upgradable and demolishable), reaching onto both banks, of the tier its span needs.
+    /// It is marked as an army's (`mode` 1) so the field-bridge limit counts it. (Older villages kept such crossings as bare segments in `bridges`: those still work as before.)
+    pub(crate) fn army_bridge(&mut self, ax: f32, ay: f32, bx: f32, by: f32) {
+        let (dx, dy) = (bx - ax, by - ay); let span = dx.hypot(dy).max(1.0);
+        let deg = ((dy.atan2(dx).to_degrees().round() as i32) % 360 + 360) % 360;
+        let a = (deg as f32).to_radians(); let (ux, uy) = (a.cos(), a.sin());
+        let l = ((span + 2.0 * BRIDGE_MARGIN) * 10.0).round() / 10.0;
+        let (cx, cy) = ((ax + bx) / 2.0, (ay + by) / 2.0);
+        let tier = BRIDGE_SPAN.iter().position(|&s| span <= s).unwrap_or(BRIDGE_SPAN.len() - 1) as u8;
+        let aux = deg + 360 * ((l * 10.0).round() as i32);
+        let rot = (((ux.atan2(uy) / std::f32::consts::FRAC_PI_4).round() as i32 % 8) + 8) % 8;
+        let (ha, hb) = (self.height_at(cx - ux * l / 2.0, cy - uy * l / 2.0), self.height_at(cx + ux * l / 2.0, cy + uy * l / 2.0));
+        self.buildings.push(Building { kind: BRIDGE, tier, x: cx, y: cy, rot: rot as u8, pad_h: (ha + hb) / 2.0, progress: 0, status: 4, aux, staff: 0, residents: 0, hp: battle::max_hp(BRIDGE, tier), burning: 0.0, garrison: 0, born: self.tick as u32, opts: 0, fert: FERT_MAX, mode: 1, target: -1, beff: 100 });
+        self.after_change();
+    }
+    /// Bridges armies have built (the old bare crossings and the bridge buildings they now leave): the field-bridge limit counts these.
+    pub(crate) fn field_bridge_count(&self) -> usize { self.bridges.len() + self.buildings.iter().filter(|b| b.kind == BRIDGE && b.mode == 1).count() }
+
     /// What a bridge would be if placed at (dx, dy): [code, centre x, centre y, angle, length, span, planks, wood, node x, node z, node x, node z]. The code is `can_place`'s; the nodes are where its roads would join.
     pub fn bridge_preview(&self, dx: i32, dy: i32) -> Vec<f32> {
         let (code, snap) = self.bridge_check(dx, dy, 0);
@@ -1828,6 +1857,7 @@ impl World {
         let Some(b) = self.buildings.get(idx as usize) else { return -1 };
         if b.tier >= max_tier(b.kind) { return -10; }
         if !self.upgrade_blockers(idx).is_empty() { return -3; }   // the bigger building would run into its neighbours: they must be demolished first
+        if b.kind == HOUSE && !self.needs_met(b.tier + 1) { return -31; }   // a better house wants more of the village (see realm.rs)
         let cost = upgrade_cost_for(b.kind, b.tier + 1);
         if cost.iter().any(|&(r, n)| self.stock[r as usize] < n) { return -6; }
         for &(r, n) in &cost { self.stock[r as usize] -= n; }
@@ -1977,6 +2007,7 @@ impl World {
 
         // production
         let reach = self.road_reach();   // which buildings the roads join to the castle: a workplace with no road to it works at half pace (see roadnet.rs)
+        let hap_now = self.happiness();
         for i in 0..self.buildings.len() {
             let (kind, tier) = (self.buildings[i].kind, self.buildings[i].tier);
             let d = &DEFS[kind as usize];
@@ -1984,7 +2015,7 @@ impl World {
             let need = d.cycle * 100;
             let ob = self.buildings[i].opts;
             let road_pace = if self.road_served(i, &reach) { 100 } else { roadnet::UNROADED_PACE };
-            let boost = self.work_boost(i);
+            let boost = self.work_boost(i) * self.realm_pace(kind, hap_now) / 100;   // (happiness, decrees, focus and charters: see realm.rs)
             let mut p = self.buildings[i].progress + self.buildings[i].beff * boost as u32 / 100 * road_pace / 100;
             let mult = 4 + 5 * tier as i32;   // better buildings employ more people and make more: x1, x2.25, x3.5, x4.75
             let scale = |n: i32| ((n * mult + 2) / 4).max(n);
@@ -2046,7 +2077,7 @@ impl World {
         if self.eat_units(eat as i64) {
             let cap_pop = self.capacity();
             let hap = self.happiness();
-            if self.population < cap_pop && self.rng.range(if hap >= 70 { 4 } else if hap < 30 { 8 } else { 5 }) == 0 { self.arrive(1); }
+            if self.population < cap_pop && self.rng.range(self.arrival_one_in(hap)) == 0 && self.food() >= self.population as i32 { self.arrive(1); }   // newcomers: a few a day, more when the village is happy, and only to full stores (see realm.rs)
         } else {
             // famine takes a share of the village a day (about `HUNGER_PER_MILLE_DAY` per mille of the villagers), not a villager every few seconds
             let one_in = ((1000 * DAY) / (HUNGER_PER_MILLE_DAY * (self.population as u64).max(1))).max(1) as u32;
@@ -2069,7 +2100,7 @@ impl World {
         if self.population > cap_pop { self.leave(1); }
 
         // tax
-        if self.tick % 10 == 0 { let n = ((self.population as i32 / 10).max(1) * (50 + self.happiness() as i32) / 100).max(1); self.gain(ledger::EX_TAX, GD, n, cap); }
+        if self.tick % 10 == 0 { let n = ((self.population as i32 / 10).max(1) * (50 + self.happiness() as i32) / 100 * self.tax_pct() / 100).max(1); self.gain(ledger::EX_TAX, GD, n, cap); }
 
         // luxury: meat (smoked or fresh) is eaten for the mood, not to stay alive
         if self.tick % LUXURY_EVERY == 0 {
@@ -2092,6 +2123,7 @@ impl World {
         // disease (an outbreak runs for many days: see plague.rs)
         self.plague_step();
         self.wilds_step();
+        self.realm_step();
 
         // random events
         if self.rng.range(200) == 0 {
@@ -2108,7 +2140,7 @@ impl World {
                 if self.raid_warning_boss { let kind = self.raid_boss_kind(self.raid_warning_rf); self.begin_boss_raid(kind, self.raid_warning_angle, self.raid_warning_rf, self.raid_warning_name); }
                 else {
                     let objective = self.warned_raid_objective();
-                    let force = self.bandit_force(self.raid_warning_rf);
+                    let force = self.bandit_raid_force(self.raid_warning_rf);   // (titled villages are raided harder, a first raid is small: see realm.rs)
                     if self.begin_battle(force, self.raid_warning_angle, 0) { self.battle.as_mut().unwrap().objective = objective; }
                 }
             }
@@ -2148,7 +2180,7 @@ impl World {
         self.choice = Some((kind, self.tick + CHOICE_DAYS * DAY));
         self.push_event(EV_CHOICE, kind as i32, 0);
     }
-    fn choice_options(&self) -> u32 { match self.choice { Some((CH_PLAGUE, _)) => 2, Some((CH_PREACHER, _)) => 2, Some((CH_NOBLE, _)) => 2, Some((CH_WINTER, _)) => 3, _ => 0 } }
+    fn choice_options(&self) -> u32 { match self.choice { Some((CH_FOCUS, _)) => self.realm.offer.len() as u32 + 1, Some((CH_PLAGUE, _)) => 2, Some((CH_PREACHER, _)) => 2, Some((CH_NOBLE, _)) => 2, Some((CH_WINTER, _)) => 3, _ => 0 } }
 
     /// The decision waiting for the player: [kind, number of options, days left], or empty.
     pub fn choice_flat(&self) -> Vec<i32> { match self.choice { Some((k, due)) => vec![k as i32, self.choice_options() as i32, (due.saturating_sub(self.tick) / DAY) as i32], None => vec![] } }
@@ -2158,6 +2190,7 @@ impl World {
             (Some((CH_PREACHER, _)), 0) => vec![GD as i32, 20],
             (Some((CH_NOBLE, _)), 0) => vec![GR as i32, 100, GD as i32, 30],
             (Some((CH_WINTER, _)), 0) => vec![GD as i32, 60],
+            (Some((CH_FOCUS, _)), o) if (o as usize) < self.realm.offer.len() => realm::focus_cost(self.realm.offer[o as usize]).iter().flat_map(|&(r, n)| [r as i32, n]).collect(),
             _ => vec![],
         }
     }
@@ -2178,9 +2211,11 @@ impl World {
             (CH_PREACHER, 0) => { self.mood = 10; self.mood_until = now + 10 * day; }
             (CH_NOBLE, 0) => { let cap = self.storage_cap(); self.stock[GD as usize] = Self::add_capped(self.stock[GD as usize], 90, cap); self.mood = 8; self.mood_until = now + 6 * day; }
             (CH_WINTER, 0) => { let cap = self.storage_cap(); self.stock[W as usize] = Self::add_capped(self.stock[W as usize], 80, cap); }
+            (CH_FOCUS, o) if (o as usize) < self.realm.offer.len() => { self.realm.focus = self.realm.offer[o as usize]; self.realm.focus_until = now + realm::FOCUS_DAYS * day; }
             (CH_WINTER, 1) => { self.mood = -4; self.mood_until = now + 10 * day; self.warm = true; self.stock[W as usize] += 0; self.share_until = now + 10 * day; }
             _ => {}
         }
+        if kind == CH_FOCUS { let id = self.realm.offer.get(opt as usize).copied().unwrap_or(0); self.realm.offer.clear(); self.choice = None; self.push_event(EV_CHOSE, kind as i32, id as i32); return 0; }   // (the event names the focus taken, 0 none)
         self.choice = None; self.push_event(EV_CHOSE, kind as i32, opt as i32); 0
     }
 
@@ -2341,7 +2376,7 @@ impl World {
         let adults = self.adults(); let aged = take(&mut self.rng, adults, 90); self.elders += aged;
         let died = take(&mut self.rng, self.elders, 25).min(self.population.saturating_sub(2));
         self.kill(died, DIED_OLD, 1);
-        if self.food() >= 10 && self.happiness() >= 40 && self.population < self.capacity() {
+        if self.food() >= 10 && self.happiness() >= 40 && self.population < self.capacity() && self.realm.rations != realm::RATIONS_LEAN {
             let couples = self.adults() / 2; let room = self.capacity() - self.population;
             let born = take(&mut self.rng, couples, 14).min(room);
             self.born_n(born);
@@ -2584,14 +2619,14 @@ impl World {
         if kind == FARM { 100 + if ob & 1 != 0 { 10 } else { 0 } + if ob & 4 != 0 { 5 } else { 0 } + if ob & 8 != 0 { 10 } else { 0 } + tier2_speed(kind, ob) }
         else if ob != 0 && !matches!(kind, HOUSE | WALL | TOWER | GATE | DRAWBRIDGE | BARRACKS | KEEP | TOWN_HALL | CHAPEL | WELL | BRIDGE | HOSPITAL | GRAVEYARD) { 100 + if ob & 4 != 0 { 10 } else { 0 } + if ob & 8 != 0 { 5 } else { 0 } + tier2_speed(kind, ob) } else { 100 }   // scarecrow, fence and barn; awning and stone footing: the building works that much faster
     }
-    /// What sets the building's work pace, each in percent (100 = no effect): [design upgrades, road to the castle (50 with none), how fully it is staffed].
+    /// What sets the building's work pace, each in percent (100 = no effect): [design upgrades, road to the castle (50 with none), how fully it is staffed, the village (happiness, decrees, focus, charters: see realm.rs)].
     pub fn work_pace(&self, idx: u32) -> Vec<u32> {
         let i = idx as usize; if i >= self.buildings.len() { return vec![100, 100, 100]; }
         let road = if self.road_served(i, &self.road_reach()) { 100 } else { roadnet::UNROADED_PACE };
-        vec![self.work_boost(i), road, self.buildings[i].beff.min(100)]
+        vec![self.work_boost(i), road, self.buildings[i].beff.min(100), self.realm_pace(self.buildings[i].kind, self.happiness())]
     }
     /// The building's whole work pace in percent: the three parts of `work_pace` multiplied.
-    pub fn work_speed(&self, idx: u32) -> u32 { self.work_pace(idx).iter().product::<u32>() / 10_000 }
+    pub fn work_speed(&self, idx: u32) -> u32 { (self.work_pace(idx).iter().map(|&p| p as u64).product::<u64>() / 1_000_000) as u32 }
     /// What the building at `idx` works: [deposit index, remaining, maximum, dormant 0/1, ore taken per day at its present staffing], or empty when it needs no deposit.
     pub fn building_deposit(&self, idx: u32) -> Vec<f32> {
         let Some(b) = self.buildings.get(idx as usize) else { return vec![] };
@@ -3326,6 +3361,7 @@ impl World {
         h -= (self.unburied as i32 * 2).min(20);   // the dead lie unburied
         h += self.devotion / 10 + (2 * count(GRAVEYARD)).min(4) + (3 * self.buildings.iter().filter(|b| b.kind == HOSPITAL && b.staff > 0).count() as i32).min(6);
         h += self.perks().happy;
+        h += self.realm_happy();
         if self.tick < self.mood_until { h += self.mood; }
         h.clamp(0, 100) as u32
     }
@@ -3393,7 +3429,7 @@ impl World {
         let part = |f: &dyn Fn(&mut dyn FnMut(u64))| -> u64 { let mut h: u64 = 0xcbf29ce484222325 ^ self.seed; f(&mut |v: u64| { h ^= v; h = h.wrapping_mul(0x100000001b3); }); h };
         vec![
             part(&|mix| {   // core: the clock, the random stream, the people and everything that is a plain number
-                mix(self.tick); mix(self.rng.0); mix(self.raid_warning_ticks as u64); mix(self.raid_warning_angle.to_bits() as u64); mix(self.raid_warning_rf.to_bits() as u64); mix(self.raid_warning_boss as u64); mix(self.raid_warning_name as u64); mix(self.population as u64); mix(self.sick as u64); mix(self.plague_start); mix(self.plague_end); if let Some(c) = self.plague_camp { mix(c.x.to_bits() as u64); mix(c.y.to_bits() as u64); mix(c.since); mix(c.name as u64); } mix(self.quarantine_until); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.cold_days as u64); mix(self.born as u64); mix(self.arrived as u64); mix(self.enlisted as u64); mix(self.left as u64); for d in self.died { mix(d as u64); } mix(self.unburied as u64); mix(self.buried as u64); mix(self.graves_used as u64); mix(self.devotion as i64 as u64); mix(self.style as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } self.wilds.mix(mix); mix(self.mood as i64 as u64); mix(self.greed as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64));
+                mix(self.tick); mix(self.rng.0); mix(self.raid_warning_ticks as u64); mix(self.raid_warning_angle.to_bits() as u64); mix(self.raid_warning_rf.to_bits() as u64); mix(self.raid_warning_boss as u64); mix(self.raid_warning_name as u64); mix(self.population as u64); mix(self.sick as u64); mix(self.plague_start); mix(self.plague_end); if let Some(c) = self.plague_camp { mix(c.x.to_bits() as u64); mix(c.y.to_bits() as u64); mix(c.since); mix(c.name as u64); } mix(self.quarantine_until); mix(self.children as u64); mix(self.elders as u64); mix(self.warm as u64); mix(self.cold_days as u64); mix(self.born as u64); mix(self.arrived as u64); mix(self.enlisted as u64); mix(self.left as u64); for d in self.died { mix(d as u64); } mix(self.unburied as u64); mix(self.buried as u64); mix(self.graves_used as u64); mix(self.devotion as i64 as u64); mix(self.style as u64); mix(self.hero.map_or(999, |h| h.0 as u64 * 1000 + h.1 as u64)); mix(self.explored.iter().map(|&c| c as u64).sum::<u64>()); for &d in &self.neutral_done { mix(d as u64); } self.wilds.mix(mix); self.realm.mix(mix); mix(self.mood as i64 as u64); mix(self.greed as u64); mix(self.mood_until); mix(self.quarantine_until); mix(self.choice.map_or(99, |c| c.0 as u64));
             }),
             part(&|mix| {
                 for s in &self.stock { mix(*s as i64 as u64); }
@@ -3504,6 +3540,8 @@ mod option_tests;
 mod bribe_tests;
 #[cfg(test)]
 mod wilds_tests;
+#[cfg(test)]
+mod realm_tests;
 #[cfg(test)]
 mod restart_tests;
 #[cfg(test)]
@@ -3970,7 +4008,7 @@ mod tests {
             let d = w.det_flat();
             assert_eq!(d[8] as u8, march::S_IDLE, "crossed: {:?}", &d[..16]);
             assert!((d[1] - (x0 + len + 5.0)).abs() < 1.0);
-            assert_eq!(!w.bridges_flat().is_empty(), expect_bridge, "bridge for short crossings, ferry for long ones");
+            assert_eq!(w.field_bridge_count() > 0, expect_bridge, "bridge for short crossings, ferry for long ones");
             assert!(w.stock[if expect_bridge { PL } else { W } as usize] < 200, "materials were spent");
             let _ = id;
         }

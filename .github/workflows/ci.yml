@@ -60,7 +60,7 @@ jobs:
         run: |
           wasm-pack build ../crates/game-core --target nodejs --release --no-opt --out-dir ../../web/tests/.wasm
           node -e "require('fs').writeFileSync('tests/.wasm/package.json','{\"type\":\"commonjs\"}')"
-          node --experimental-strip-types --test tests/demo.test.mjs tests/replay.test.mjs
+          node --experimental-strip-types --test tests/demo.test.mjs tests/replay.test.mjs tests/opening.wasm.test.mjs tests/desync.test.mjs
       - run: npx vite build
 
   mcp:

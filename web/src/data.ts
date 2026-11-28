@@ -85,7 +85,7 @@ export const STATUS = ['Working', 'Waiting for materials', 'Resource exhausted',
 
 export const PLACE_ERRORS: Record<number, string> = {
   [-1]: 'Unknown building', [-2]: 'Outside your village border — build more to grow it', [-3]: 'Something is in the way', [-27]: 'Too far out — lay a road to here and build beside it',
-  [-4]: 'Too close to water', [-5]: 'Ground is too steep', [-6]: 'Not enough resources', [-7]: 'Needs a nearby ore or stone deposit',
+  [-31]: 'This house wants more of the village before it can grow: see its needs', [-4]: 'Too close to water', [-5]: 'Ground is too steep', [-6]: 'Not enough resources', [-7]: 'Needs a nearby ore or stone deposit',
   [-8]: 'Needs a forest nearby', [-9]: 'Cannot build that', [-18]: 'No water to bridge here — click closer to a moat, river or lake', [-19]: 'Too wide for a footbridge: bridges of better tiers span more',
   [-16]: 'Needs water beside it: a river, lake or moat', [-20]: 'A gate must stand in a wall: click a wall piece', [-24]: 'A patch to level is 3 to 14 wide', [-25]: 'No dry ground round it to level to: the patch is in water', [-26]: 'A building stands in it: its footing would be left in the air', [-28]: 'Choose a ground height from 1 to 24', [-29]: 'Choose a target height in the direction of the tool', [-21]: 'That stretch of road is too long: put a point in between',
   [-17]: 'An ore or stone deposit is in the way', [-14]: 'It is burning — put the fire out first', [-102]: 'Not enough archers in the barracks', [-103]: 'The tower is full', [-104]: 'Not during a battle', [-15]: 'Nothing to repair',
@@ -105,7 +105,29 @@ export const CHOICES: { title: string; story: string; options: string[] }[] = [
   { title: 'A travelling preacher', story: 'A preacher with a worn cloak asks leave to speak in the square.', options: ['Welcome him (20 coins; spirits rise for 10 days)', 'Turn him away'] },
   { title: 'A noble visits', story: 'A knight with a small train asks for hospitality.', options: ['Hold a feast (100 grain, 30 coins; he leaves 90 coins)', 'Decline politely'] },
   { title: 'A hard winter', story: 'The first snow has fallen and the woodpiles are low.', options: ['Buy firewood (60 coins for 80 wood)', 'Share what there is (firewood lasts twice as long, people grumble)', 'Do nothing'] },
+  { title: 'A focus for the village', story: 'Your reeve proposes where to put the village\'s effort for the next eight days. Each costs something to take up.', options: [] },   // (options come from World.focus_offer: see FOCI)
 ];
+
+/** The focus areas the reeve may propose (ids from 1, see realm.rs): name and what it does for eight days. */
+export const FOCI: { name: string; effect: string }[] = [
+  { name: 'None', effect: '' },
+  { name: 'War', effect: 'soldiers train 50% faster and half again as many villagers take up arms in a raid' },
+  { name: 'Farming', effect: 'farms work 25% faster' },
+  { name: 'Diplomacy', effect: 'every village you know thinks a little better of you each day' },
+  { name: 'Trade', effect: 'taxes bring in 25% more and the market sells close to cost' },
+  { name: 'Faith', effect: 'happiness +8 and one sick villager is healed each day' },
+  { name: 'Industry', effect: 'workshops (sawmill, smelter, smithy, mint...) work 20% faster' },
+  { name: 'Mining', effect: 'mines, quarries and clay pits work 30% faster' },
+];
+/** The charters a titled lord may grant, and the titles. */
+export const CHARTERS: { name: string; effect: string }[] = [
+  { name: 'Market charter', effect: 'taxes +10%' },
+  { name: 'Mining charter', effect: 'mines, quarries and clay pits +15%' },
+  { name: 'Military charter', effect: 'training +25%, wages −25%' },
+  { name: 'Farming charter', effect: 'farms +10%' },
+  { name: 'Charter of piety', effect: 'happiness +4' },
+];
+export const TITLES = ['Lord', 'Baron', 'Count', 'Duke'];
 
 const HERO_NAME = (i: number) => ['Sir Aldric', 'Dame Isolde', 'Lord Godfrey', 'Lady Maud', 'Sir Baldwin', 'Dame Hawise', 'Lord Roland', 'Lady Eleanor', 'Sir Hugh', 'Dame Alys', 'Lord Edmund', 'Lady Cecily'][i % 12];
 
@@ -132,7 +154,11 @@ export const EVENT_TEXT = (k: number, a: number, b: number): { text: string; ton
     case 14: return { text: 'The builders raised a ruined building again.', tone: 'good' };
     case 16: return { text: 'A bitter winter without firewood: someone froze to death.', tone: 'bad' };
     case 18: return { text: `${CHOICES[a]?.title ?? 'A decision'}: the village waits for your word.`, tone: 'info' };
-    case 19: return { text: `You decided: ${CHOICES[a]?.options[b] ?? ''}`, tone: 'info' };
+    case 19: return a === 4 ? { text: b ? `The village turns to ${FOCI[b]?.name.toLowerCase() ?? 'a new focus'} for eight days.` : 'You turned down every focus the reeve proposed.', tone: 'info' } : { text: `You decided: ${CHOICES[a]?.options[b] ?? ''}`, tone: 'info' };
+    case 30: return a === 1 ? { text: 'An unhappy family packs up and leaves the village.', tone: 'bad' }
+      : a === 2 ? { text: `The pay chest is empty (${b} coins owed): a soldier deserts.`, tone: 'bad' }
+      : a === 3 ? { text: `Your renown has grown: you are now ${b === 1 ? 'a Baron' : b === 2 ? 'a Count' : 'a Duke'}. Grant a charter at the town hall.`, tone: 'good' }
+      : { text: 'The village\'s focus has run its course.', tone: 'info' };
     case 22: return { text: `Bodies lie unburied and sickness spreads: ${a} dead have no grave.`, tone: 'bad' };
     case 23: return { text: `The church held a service. The tithe brought ${a} gold.`, tone: 'good' };
     case 24: return { text: 'A foreign envoy was received with gifts.', tone: 'info' };

@@ -2,8 +2,9 @@
 import type { World } from './wasm/game_core.js';
 
 export const GOALS: { text: string; detail?: string; ok: (c: Counts) => boolean }[] = [
-  { text: 'Build 3 houses', detail: 'Press 1 and click the ground', ok: c => c.n(0) >= 3 },
-  { text: 'Build a farm', detail: 'Your people need grain', ok: c => c.n(1) >= 1 },
+  { text: 'Build a farm', detail: 'Your people need grain: food first, then homes', ok: c => c.n(1) >= 1 },
+  { text: 'Build 2 houses', detail: 'Press 1 and click the ground', ok: c => c.n(0) >= 2 },
+  { text: 'Build a second farm', detail: 'More people eat more: a farm feeds about one house', ok: c => c.n(1) >= 2 },
   { text: 'Build a woodcutter near a forest', ok: c => c.n(4) >= 1 },
   { text: 'Build a sawmill for planks', ok: c => c.n(5) >= 1 },
   { text: 'Open a quarry at a stone outcrop', detail: 'Press V to find deposits', ok: c => c.n(6) >= 1 },

@@ -71,7 +71,7 @@ fn an_army_sent_to_a_raid_across_a_moat_gets_the_drawbridge_lowered_crosses_on_t
     assert!(down_at.is_some(), "the drawbridge was lowered for the army");
     assert!(crossed && joined, "the army got across and joined the fight");
     assert!(up_again.unwrap() > down_at.unwrap() + 2, "and was drawn up again afterwards");
-    assert!(w.bridges.is_empty(), "no bridge of planks was built: the drawbridge made it unnecessary");
+    assert!(w.field_bridge_count() == 0, "no bridge of planks was built: the drawbridge made it unnecessary");
     for _ in 0..30 { tick(&mut w); } assert_eq!(st(&w, di), DB_UP, "it stays up when no army needs it");
 }
 
@@ -108,7 +108,7 @@ fn a_manual_raise_wins_over_the_automatic_lowering() {
     assert_eq!(w.drawbridge_set(di, true), 0);
     assert_eq!(st(&w, di), DB_UP);
     for t in 0..100 { tick(&mut w); assert_eq!(st(&w, di), DB_UP, "the player's raise holds against the army (t{t})"); }
-    assert!(!w.bridges.is_empty() || w.det_flat()[2] > 30.0, "it went another way (a bridge of its own): {:?}", w.det_flat());
+    assert!(w.field_bridge_count() > 0 || w.det_flat()[2] > 30.0, "it went another way (a bridge of its own): {:?}", w.det_flat());
     // and by hand it can be lowered again
     assert_eq!(w.drawbridge_set(di, false), 0); assert_eq!(st(&w, di), 4);
     for _ in 0..30 { tick(&mut w); } assert_eq!(st(&w, di), 4, "a bridge lowered by hand stays down");
@@ -144,7 +144,7 @@ fn with_no_drawbridge_a_narrow_moat_is_bridged_with_planks() {
     }
     assert!(bridging && over, "it built a bridge ({bridging}) and crossed ({over})");
     assert!(w.stock[PL as usize] < planks0, "planks were spent: {} of {planks0}", w.stock[PL as usize]);
-    assert!(!w.bridges.is_empty());
+    assert!(w.field_bridge_count() > 0);
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn a_moat_too_wide_to_bridge_is_ferried_not_waded() {
     assert_eq!(w.det_march(id, 0.0, 60.0, false, 0.0, 0.0), 0);
     let mut ferried = false;
     for t in 0..300 { w.step(); let f = w.det_flat(); let s = f[8] as u8; if s == march::S_FERRY { ferried = true; } else { assert!(!wet(&w, f[1], f[2]), "t{t}: wading at {},{} (state {s})", f[1], f[2]); } }
-    assert!(ferried && w.bridges.is_empty());
+    assert!(ferried && w.field_bridge_count() == 0);
 }
 
 #[test]
@@ -247,3 +247,86 @@ fn a_big_fight_across_a_moat_never_puts_our_soldiers_in_the_water() {
     }
 }
 
+
+#[test]
+fn an_armys_bridge_is_a_real_bridge_that_villagers_and_later_armies_use() {
+    let mut w = World::new(1337, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0);
+    ring(&mut w, 24.0, 52, MOAT); w.after_change();
+    w.army = [8, 0, 4, 0, 0, 0];
+    let id = w.det_form(&[8, 0, 4, 0, 0, 0]); assert!(id > 0);
+    assert_eq!(w.det_march(id, 0.0, 50.0, false, 0.0, 0.0), 0);
+    for _ in 0..200 { w.step(); if w.det_flat()[2] > 33.0 { break; } }
+    // the same building the player builds: in the buildings, in the list the client draws bridges from, marked as an army's
+    let b = w.buildings.iter().position(|b| b.kind == BRIDGE).expect("the army left a bridge building");
+    assert_eq!(w.buildings[b].mode, 1); assert!(w.bridges.is_empty(), "no bare crossing any more");
+    let spans = w.bridge_spans_flat(); assert_eq!(spans.len(), 10); assert_eq!(spans[0] as usize, b);
+    let (ux, uy, l) = World::bridge_dir(&w.buildings[b]); let (bx, by) = (w.buildings[b].x, w.buildings[b].y);
+    assert!(l >= 4.0, "it spans the moat and reaches the banks: {l}");
+    // villagers walk over it (the path network knows it as it knows the player's bridges)
+    let (ax, ay, cx, cy) = (bx - ux * (l / 2.0 + 3.0), by - uy * (l / 2.0 + 3.0), bx + ux * (l / 2.0 + 3.0), by + uy * (l / 2.0 + 3.0));
+    let route = w.walk_route(ax, ay, cx, cy); assert!(!route.is_empty(), "villagers can cross the moat on it");
+    // a second army crosses on it without bridging again
+    let n = w.field_bridge_count();
+    w.army = [6, 0, 0, 0, 0, 0]; let id2 = w.det_form(&[6, 0, 0, 0, 0, 0]); assert!(id2 > 0);
+    assert_eq!(w.det_march(id2, 0.0, 50.0, false, 0.0, 0.0), 0);
+    for _ in 0..200 { w.step(); }
+    assert_eq!(w.field_bridge_count(), n, "the second army used the bridge that was there");
+    // and it can be demolished like any building
+    assert!(w.demolish(b as u32)); assert_eq!(w.field_bridge_count(), n - 1);
+}
+
+#[test]
+#[ignore]
+fn survey_army_marches() {
+    for seed in [1337u64, 7, 42] {
+        let (mut ok, mut blocked, mut stalled, mut refused) = (0, 0, 0, 0);
+        let mut notes = vec![];
+        for k in 0..14 {
+            let mut w = World::new(seed, 0, 0); w.stock = [30000; N_RES]; w.cheat(3, 0, 0);
+            let a = k as f32 * 0.449 + 0.3; let r = 150.0 + (k % 5) as f32 * 120.0;
+            let (tx, ty) = (a.cos() * r, a.sin() * r);
+            w.army = [10, 4, 4, 2, 2, 2]; let id = w.det_form(&[10, 4, 4, 2, 2, 2]);
+            let c = w.det_march(id, tx, ty, false, 0.0, 0.0); if c != 0 { refused += 1; notes.push(format!("refused {c} to {tx:.0},{ty:.0}")); continue; }
+            let (mut last, mut still, mut done) = ((0.0f32, 0.0f32), 0, false);
+            for t in 0..9000 {
+                w.step();
+                let f = w.det_flat(); if f.is_empty() { break; }
+                let (x, y, s) = (f[1], f[2], f[8] as u8);
+                if s == march::S_BLOCKED { blocked += 1; notes.push(format!("blocked at {x:.0},{y:.0} going to {tx:.0},{ty:.0} t{t}")); done = true; break; }
+                if s == march::S_IDLE || s == march::S_ARRIVED { if (x - tx).hypot(y - ty) < 12.0 { ok += 1; } else { notes.push(format!("stopped short at {x:.0},{y:.0} of {tx:.0},{ty:.0}")); stalled += 1; } done = true; break; }
+                let moving = matches!(s, march::S_MARCH | march::S_HOME);
+                if moving && (x - last.0).hypot(y - last.1) < 0.05 { still += 1; } else { still = 0; }
+                if still > 120 {
+                    let d = &w.dets[0];
+                    let gs: Vec<String> = d.grp.iter().map(|g| format!("units {:?} at {:.0},{:.0} wi {}/{} tied {} speed {:.2}", g.units, g.x, g.y, g.wi, g.path.len(), g.tied, g.speed)).collect();
+                    // does it ever finish?
+                    let mut later = -1i32; for t2 in 0..3000 { w.step(); let f = w.det_flat(); if f.is_empty() || f[8] as u8 != march::S_MARCH { later = t2; break; } }
+                    stalled += 1; notes.push(format!("stuck (state {s}) at {x:.0},{y:.0} going to {tx:.0},{ty:.0} t{t}; groups {gs:?}; finished {later} ticks later")); done = true; break;
+                }
+                last = (x, y);
+            }
+            if !done { stalled += 1; notes.push(format!("never arrived at {tx:.0},{ty:.0}: at {:.0},{:.0} state {}", w.det_flat()[1], w.det_flat()[2], w.det_flat()[8])); }
+        }
+        eprintln!("seed {seed}: arrived {ok}, blocked {blocked}, stuck/short {stalled}, refused {refused}");
+        for n in notes { eprintln!("   {n}"); }
+    }
+}
+
+#[test]
+#[ignore]
+fn survey_route_lengths() {
+    let seed = 7u64;
+    for k in 0..14 {
+        let a = k as f32 * 0.449 + 0.3; let r = 150.0 + (k % 5) as f32 * 120.0; let (tx, ty) = (a.cos() * r, a.sin() * r);
+        let mut row = format!("to {tx:.0},{ty:.0} (straight {:.0}):", tx.hypot(ty));
+        for (name, u) in [("foot", [10u32, 4, 4, 0, 0, 0]), ("engines", [10, 4, 4, 2, 2, 2])] {
+            let w = World::new(seed, 0, 0);
+            let (hx, hy) = (w.buildings[0].x, w.buildings[0].y + 9.0);
+            for (wt, label) in [(march::WaterTravel::BridgeShortcut, "shortcut"), (march::WaterTravel::ExistingDecks, "decks"), (march::WaterTravel::Build, "build")] {
+                let len = w.route_with_water(&u, hx, hy, tx, ty, wt).map(|p| World::route_length(hx, hy, &p)).unwrap_or(-1.0);
+                row += &format!(" {name}/{label} {len:.0}");
+            }
+        }
+        eprintln!("{row}");
+    }
+}

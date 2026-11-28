@@ -15,7 +15,7 @@
 //! * **Mineshafts.** An army that enters an abandoned mineshaft claims it and leaves a garrison of up to `GARRISON_MAX` soldiers there (it needs at least
 //!   `GARRISON_MIN`). While garrisoned, the shaft digs `SHAFT_IRON` iron ore (or `SHAFT_GOLD` gold ore) a day into a pile at its mouth (at most `PILE_DAYS` days' worth).
 //!   A road of yours that is joined to the castle and ends within `SHAFT_ROAD` of the shaft carries the whole pile home every day. Without one, a mule train takes
-//!   a small load (`CART_DAYS` days' digging) at a time and walks `CART_SPEED` a day (at least `CART_MIN_DAYS` days, at most `CART_MAX_DAYS`), so most of what is dug waits.
+//!   a small load (`CART_DAYS` days' digging) at a time (outlaws camped near its way rob it now and then, `CART_ROB`) and walks `CART_SPEED` a day (at least `CART_MIN_DAYS` days, at most `CART_MAX_DAYS`), so most of what is dug waits.
 //!   The garrison eats from the village's stores like every soldier (see `appetite`); while the stores are empty one of them deserts a day.
 //!   Outlaws from a live camp nearby attack it now and then: the bigger the garrison, the less often; each attack costs half the garrison and half the pile, and a shaft
 //!   with none left is lost (with its pile; a mule train already on the road still arrives). Abandoning a shaft brings its garrison home.
@@ -65,6 +65,9 @@ pub const WILD_SHAFT_ATTACKED: i32 = 3;
 pub const WILD_SHAFT_LOST: i32 = 4;
 pub const WILD_HEALED: i32 = 5;
 pub const WILD_DESERTED: i32 = 6;
+pub const WILD_CART_ROBBED: i32 = 7;
+/// The chance a day that outlaws from a live camp within `OUTLAW_REACH` of a mule train's way (the middle of it) rob it.
+pub const CART_ROB: f32 = 0.12;
 
 #[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq, Debug)]
 pub struct PlaceState {
@@ -194,6 +197,14 @@ impl World {
         let hungry = self.food() == 0;
         for (j, &(ore, x, y)) in terrain::mineshafts(self.seed).iter().enumerate() {
             let (r, n) = if ore == 0 { (IO, SHAFT_IRON) } else { (GO, SHAFT_GOLD) };
+            let sh = self.wilds.shafts[j];
+            if sh.cart_due > 0 && self.tick < sh.cart_due {   // a mule train on its way: outlaws near the way may rob it
+                let (hx, hy) = self.buildings.first().map_or((x, y), |h| (h.x, h.y));
+                if self.nearest_live_camp((x + hx) / 2.0, (y + hy) / 2.0) < OUTLAW_REACH && roll(self.seed, 4, j, day) < CART_ROB {
+                    let s = &mut self.wilds.shafts[j]; let lost = s.cart; s.cart = 0; s.cart_due = 0;
+                    self.push_event(EV_WILD, WILD_CART_ROBBED, lost);
+                }
+            }
             let sh = self.wilds.shafts[j];
             if sh.cart_due > 0 && self.tick >= sh.cart_due {   // the mule train is home (even from a shaft lost since)
                 self.gain(ledger::EX_OTHER, r, sh.cart, cap);

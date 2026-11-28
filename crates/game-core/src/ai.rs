@@ -6,7 +6,7 @@
 //! its own seeded stream, the village's real numbers and the few numbers the page tells it about its target.
 use crate::catalog::*;
 use crate::march::{S_ARRIVED, S_BLOCKED, S_IDLE};
-use crate::{terrain, wilds};
+use crate::{terrain, wilds, realm};
 use crate::military::*;
 use crate::{Rng, World, DAY, JK_ENVOY, TREATY_TRADE, TREATY_PEACE, TREATY_ALLIANCE};
 use wasm_bindgen::prelude::*;
@@ -203,6 +203,7 @@ impl Ai {
         self.diplomacy(w);
         self.consider_raid(w);
         self.wild_places(w);
+        self.rule(w);
         out
     }
 }
@@ -555,6 +556,30 @@ impl Ai {
             self.roads_tried.push(j as u32);
             let _ = w.lay_road_plan(&plan);
             break;   // one road at a time
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------ ruling (see realm.rs)
+    /// The computer rules as a player would: taxes by the mood of its people, a muster while raiders gather, a focus that suits its temperament
+    /// (farming first when food is short) when one is offered and it can spare the price, and charters as its titles allow.
+    fn rule(&mut self, w: &mut World) {
+        let hap = w.happiness();
+        let tax = if hap < 35 { realm::TAX_LOW } else if hap > 65 && w.stock[GD as usize] < 400 { realm::TAX_HIGH } else { 0 };
+        if w.realm.tax != tax { w.realm_act(1, tax as i32); }
+        let warned = w.raid_warning_ticks > 0 || w.battle.is_some();
+        if w.realm.muster != warned { w.realm_act(4, warned as i32); }
+        let offer = w.focus_offer();
+        if !offer.is_empty() {
+            let mut pref: Vec<u8> = match self.aggr { 2 => vec![realm::F_WAR, realm::F_MINING, realm::F_INDUSTRY, realm::F_FARMING], 1 => vec![realm::F_FARMING, realm::F_INDUSTRY, realm::F_MINING, realm::F_TRADE], _ => vec![realm::F_TRADE, realm::F_DIPLOMACY, realm::F_FAITH, realm::F_FARMING] };
+            if food_stock(w) < (w.population as i64) * 3 { pref.insert(0, realm::F_FARMING); }
+            let affordable = |f: u8| realm::focus_cost(f).iter().all(|&(r, n)| w.stock[r as usize] >= n + if r == GD { 60 } else { 0 });
+            let pick = pref.iter().find_map(|f| offer.iter().position(|o| o == f).filter(|_| affordable(*f)));
+            w.choose(pick.unwrap_or(offer.len()) as u8);
+        }
+        let left = w.realm.title as usize - w.realm.charters.len();
+        if left > 0 {
+            let order: [u8; 5] = match self.aggr { 2 => [realm::CH_MILITARY, realm::CH_MINING, realm::CH_FARMING, realm::CH_MARKET, realm::CH_PIETY], 1 => [realm::CH_MINING, realm::CH_FARMING, realm::CH_MARKET, realm::CH_MILITARY, realm::CH_PIETY], _ => [realm::CH_MARKET, realm::CH_PIETY, realm::CH_FARMING, realm::CH_MINING, realm::CH_MILITARY] };
+            if let Some(&c) = order.iter().find(|&&c| !w.realm.has(c)) { w.realm_act(5, c as i32); }
         }
     }
 

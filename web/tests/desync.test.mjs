@@ -119,8 +119,15 @@ test('the rules fingerprint is stable and the parts are named', () => {
   assert.equal(new World(SEED, 0, 0).state_hash_parts().length, NAMES.length);
 });
 
-test('the re-sync policy gives up for a copy that keeps going wrong', () => {
-  const p = new ResyncPolicy(); let go = 0, now = 0;
-  for (let i = 0; i < 200; i++) { now += 2000; if (p.ask(now) === 'go') go++; }   // a mismatch every two seconds for about seven minutes
-  assert.equal(go, ResyncPolicy.MAX, 'at most four requests in ten minutes, however long it goes on');
+test('the re-sync policy backs off for a copy that keeps going wrong', () => {
+  // (the policy no longer gives up after a fixed number of requests: it waits twice as long after each one, up to MAX_GAP, so a copy that keeps
+  // going wrong is asked about rarely but never abandoned)
+  const p = new ResyncPolicy(); const asked = []; let now = 0;
+  for (let i = 0; i < 400; i++) { now += 2000; if (p.ask(now) === 'go') asked.push(now); }   // a mismatch every two seconds for about thirteen minutes
+  assert.equal(asked[0], 2000, 'the first mismatch is asked about at once');
+  const gaps = asked.slice(1).map((t, i) => t - asked[i]);
+  assert.ok(gaps.every((g, i) => i === 0 || g >= gaps[i - 1]), `the waits never shrink: ${gaps}`);
+  assert.ok(gaps.every(g => g >= ResyncPolicy.GAP && g <= ResyncPolicy.MAX_GAP + 2000), 'each wait is between GAP and MAX_GAP');
+  assert.ok(asked.length <= 12, `few requests however long it goes on: ${asked.length}`);
+  assert.ok(asked.at(-1) > 600_000, 'but it keeps asking');
 });

@@ -34,7 +34,8 @@ export function applyCmd(w: World, c: Cmd) {
       break;
     case 'road': w.lay_road(Int32Array.from(c.units ?? [])); break;   // [dx, dy] per point of a road the player drew: pieces joined into one curve, the ends snapped onto nodes
     case 'visit': w.visit_neutral(c.idx!); break;
-    case 'wild': w.wild_act(c.kind ?? 0, c.idx!); break;   // a wild place: 1 tithe to an abbey, 2 abandon a mineshaft (see wilds.rs)
+    case 'wild': w.wild_act(c.kind ?? 0, c.idx!); break;
+    case 'realm': w.realm_act(c.kind ?? 0, c.idx ?? 0); break;   // decrees and charters (see realm.rs)   // a wild place: 1 tithe to an abbey, 2 abandon a mineshaft (see wilds.rs)
     case 'hero': w.hero_hire(); break;
     case 'field': w.set_field_mode(c.idx!, c.kind ?? 0); break;
     case 'workers': w.set_workers(c.idx!, c.kind ?? -1); break;   // idx the building, kind the workers wanted (-1 auto, 0 paused)
