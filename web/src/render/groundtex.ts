@@ -22,7 +22,7 @@ export function patchGround(mat: THREE.MeshStandardMaterial, detail: THREE.Textu
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;').replace('#include <begin_vertex>', '#include <begin_vertex>\n vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     const bump = THREE.ShaderChunk.bumpmap_pars_fragment.replaceAll('vBumpMapUv', '(vWP.xz * 1.15)').replace('return vec2( dBx, dBy );', 'return vec2( dBx, dBy ) * (1.0 - smoothstep(30.0, 120.0, length(vViewPosition)));');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP; uniform sampler2D uDetail;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP; uniform sampler2D uDetail;\nfloat gHash(vec2 p) { p = fract(p * vec2(234.34, 435.345)); p += dot(p, p + 34.23); return fract(p.x * p.y); }')
       .replace('#include <bumpmap_pars_fragment>', bump)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
@@ -41,6 +41,21 @@ export function patchGround(mat: THREE.MeshStandardMaterial, detail: THREE.Textu
           c = mix(c, c * vec3(1.08, 1.04, 0.82), grass * smoothstep(0.55, 0.85, d2.g) * 0.6);
           c = mix(c, c * vec3(0.84, 0.95, 0.88), grass * smoothstep(0.45, 0.1, d2.g) * 0.5);
           c *= mix(1.0, 0.8 + 0.3 * d1.b, near * (1.0 - grass) * 0.7);
+          // painted grass: big soft swathes of warmer and cooler green (seen from any distance), and close up, clumps: lit tops and shaded hollows
+          float sway = smoothstep(0.25, 0.75, d3.r * 0.6 + d2.g * 0.4);
+          c = mix(c, mix(c * vec3(1.07, 1.05, 0.84), c * vec3(0.95, 1.02, 0.98), sway), grass * 0.7);
+          float clump = smoothstep(0.35, 0.8, texture2D(uDetail, vWP.xz * 0.55 + vec2(0.19, 0.83)).g);
+          c *= mix(1.0, 0.86 + 0.26 * clump, grass * near);
+          // flowers: about one cell in fifteen of a 1.3-unit grid holds a small white, yellow or pink dot (close up only, and only on grass)
+          {
+            vec2 cell = floor(vWP.xz * 0.75), f = fract(vWP.xz * 0.75) - 0.5;
+            float h = gHash(cell), pick = gHash(cell + 17.0);
+            vec2 o = vec2(gHash(cell + 3.0), gHash(cell + 7.0)) * 0.5 - 0.25;
+            float dot1 = 1.0 - smoothstep(0.07, 0.11, length(f - o));
+            vec3 bloom = pick < 0.45 ? vec3(0.95, 0.93, 0.85) : pick < 0.8 ? vec3(0.98, 0.82, 0.25) : vec3(0.92, 0.55, 0.68);
+            float show = step(0.93, h) * dot1 * grass * smoothstep(0.0, 0.4, near) * smoothstep(0.3, 0.6, d2.g);
+            c = mix(c, bloom * 0.85, show);
+          }
           diffuseColor.rgb = c;
         }`);
   };

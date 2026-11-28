@@ -34,20 +34,23 @@ slate, plaster, daub and half-timber textures piece by piece at 512 px. Each pie
 A height picture drawn from the same shapes makes the normal map, so the bump follows the real pieces. The textures are seeded (the same on every load) and keep
 the old layouts and average colours. Painting all of them takes about 0.7 s in a headless browser that draws on the CPU, less on a real graphics card.
 
+**Phase 3: softer shapes.** `src/render/chamfer.ts`: a box with bevelled edges (the same 24 vertices as a plain box, 44 triangles instead of 12; the light blends
+across the bevel, which reads as a rounded edge). `b.box` in `buildings.ts` uses it for every box big enough to show one (`bevelFor`: walls get up to 0.24 units,
+beams a slight edge); small trim (quoins, joists, shutters, rafter tails) stays a plain box. Roof eaves are thicker (0.24, thatch 0.42) and the ridge beam is
+bevelled. Across all building models this adds about 37% triangles (houses 54%); draw calls are unchanged, and distant houses still give way to the 18-triangle
+proxies. `tests/chamfer.test.mjs` checks the shape is closed, wound outwards, the right size and textured like a plain box.
+
+**Phase 4: ground, roads and fields.**
+- Grass (`patchGround` in `src/render/groundtex.ts`): broad swathes of warmer and cooler green at every distance; close up, clumps with lit tops and shaded
+  hollows, and now and then a small white, yellow or pink flower.
+- Roads (`src/render/paths.ts`): a bump from the surface's own brightness, so cobbles, flagstones and gravel catch the sun close up. The textures themselves
+  were already painted stone by stone and are pinned down by `tests/roadlook.test.mjs`, so they are unchanged.
+- Fields (`painted.ts`, `farm` in `buildings.ts`): painted crops in place of flat colour: young shoots on the first field, ripe wheat, leafy greens and ploughed
+  furrows on the fields a bigger farm adds. Painting the four adds about 0.25 s at load (CPU-drawn headless browser).
+- Still plain: garden lawns and pastures inside building models (the palace garden, parks) are flat-colour materials. Giving them the terrain's grass shader
+  (`patchGround`) is the next small step.
+
 ## Next
-
-**Phase 3: softer shapes.** The biggest step towards the toy look, and the riskiest for draw cost and tier recognition.
-- Bevel the shared box and cylinder helpers in `src/render/buildings.ts` (`b.box`, `b.cyl`, `b.gable`), not the 2,500 lines of individual models: chamfered edges
-  with a light vertex-colour highlight along them. One change softens every building.
-- Thicker roof overhangs and fascia boards on `b.gable`; slightly rounder chimneys.
-- Check: triangle counts in `tests/models.test.mjs`, the batched far-house path (`farHouseMat`) and the draw-call folding (`foldedMaterial`) still apply.
-- Check every tier in the test hall side by side (lookshots `hall-*`).
-
-**Phase 4: ground and roads.** Most of the screen is ground, and it still reads flat.
-- `src/render/groundtex.ts` `patchGround`: painted grass clumps with hue drift (warm-dry and cool-damp patches), a few flower dots near the camera.
-- Roads (`src/render/roadlook.ts`, `src/render/roadmesh.ts`): the painted cobble from Phase 2, a soft pebble edge into the grass.
-- The plain-coloured field, crop and garden materials in `buildings.ts` (`field`, `soil`, `leaf`, `straw` and the inline `MeshStandardMaterial` colours) were
-  tuned under ACES. Under the new curve the crop greens and wheat yellows read a little loud, so give them the same painted treatment and calmer bases.
 
 **Phase 5: snow on the village in winter.** The core already reports the season (`src/winter.ts`). One shader patch on the shared materials whitens surfaces that
 face up (roofs, ground, tree tops, log piles) with a soft, noisy edge, faded in at the start of winter and out at the end. The roof textures' height picture can

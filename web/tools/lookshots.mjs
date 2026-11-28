@@ -44,6 +44,7 @@ const home = await page.evaluate(() => ({ x: window.__game.lv.ox, z: window.__ga
 await shot('village-wide', home.x, home.z, 110, 0.7, 0.95);
 await shot('village-close', home.x, home.z, 50, 0.7, 0.8);
 await shot('village-low', home.x + 10, home.z - 10, 38, 2.2, 0.6);
+await shot('ground-close', home.x + 62, home.z + 30, 16, 0.9, 0.75);   // plain grass outside the village, close up
 
 // the test hall: rows of buildings, tiers left to right (see src/render/showroom.ts)
 await page.evaluate(() => window.__game.toggleShowroom());

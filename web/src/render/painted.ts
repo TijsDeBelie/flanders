@@ -276,6 +276,42 @@ function cobbles(p: Paint, base: RGB, dirt: RGB, n: number) {
   }
 }
 
+/** Rows of a crop across the field (along x), `rows` per tile: earth between them, the plants drawn as many small lit leaves or stalks. */
+function cropRows(p: Paint, soil: RGB, plant: RGB, rows: number, kind: 'leaf' | 'stalk' | 'shoot') {
+  const s = p.s, rh = s / rows;
+  p.fill(soil, 0.25);
+  // the earth: a darker furrow down the middle of each gap, a few clods
+  for (let r = 0; r < rows; r++) {
+    const y = r * rh, g = p.col.createLinearGradient(0, y, 0, y + rh);
+    g.addColorStop(0, css(mul(soil, 1.08))); g.addColorStop(0.5, css(mul(soil, 0.8))); g.addColorStop(1, css(mul(soil, 1.08)));
+    p.col.fillStyle = g; p.col.fillRect(0, y, s, rh);
+  }
+  for (let i = 0; i < s * 0.8; i++) { const x = p.r(0, s), y = p.r(0, s), rr = p.r(1, 2.5); p.col.fillStyle = css(mul(soil, p.r(0.7, 1.25)), 0.7); p.col.beginPath(); p.col.arc(x, y, rr, 0, 7); p.col.fill(); }
+  for (let r = 0; r < rows; r++) {
+    const cy = (r + 0.5) * rh, band = rh * (kind === 'shoot' ? 0.32 : kind === 'leaf' ? 0.62 : 0.78);
+    const n = Math.round(s * (kind === 'stalk' ? 2.2 : kind === 'leaf' ? 0.55 : 0.5));
+    for (let i = 0; i < n; i++) {
+      const x = p.r(0, s), y = cy + p.r(-band / 2, band / 2), c = p.vary(plant, 0.16, 0.08), lit = p.rnd() < 0.3;
+      if (kind === 'stalk') {
+        const len = p.r(rh * 0.25, rh * 0.5);
+        p.wrap(x - 2, y - len, 4, len, (px, py) => {
+          p.col.strokeStyle = css(lit ? mul(c, 1.22) : c, 0.85); p.col.lineWidth = p.r(1, 2); p.col.beginPath(); p.col.moveTo(px + 2, py + len); p.col.lineTo(px + 2 + p.r(-1.5, 1.5), py); p.col.stroke();
+          p.col.fillStyle = css(mul(c, 1.15), 0.9); p.col.beginPath(); p.col.ellipse(px + 2, py + 1, 1.4, 3, 0, 0, 7); p.col.fill();
+          p.hgt.strokeStyle = grey(p.r(0.7, 1)); p.hgt.lineWidth = 1.5; p.hgt.beginPath(); p.hgt.moveTo(px + 2, py + len); p.hgt.lineTo(px + 2, py); p.hgt.stroke();
+        });
+      } else {
+        const rx = kind === 'leaf' ? p.r(3, 7) : p.r(1.5, 3.5), ry = rx * p.r(0.5, 0.8), a = p.r(0, 3.14);
+        p.wrap(x - rx, y - rx, rx * 2, rx * 2, (px, py) => {
+          const cx = px + rx, cyy = py + rx;
+          p.col.fillStyle = css(mul(c, 0.7), 0.8); p.col.beginPath(); p.col.ellipse(cx + 1, cyy + 1.5, rx, ry, a, 0, 7); p.col.fill();   // its shadow
+          p.col.fillStyle = css(lit ? mul(c, 1.2) : c); p.col.beginPath(); p.col.ellipse(cx, cyy, rx, ry, a, 0, 7); p.col.fill();
+          p.hgt.fillStyle = grey(p.r(0.75, 1)); p.hgt.beginPath(); p.hgt.ellipse(cx, cyy, rx, ry, a, 0, 7); p.hgt.fill();
+        });
+      }
+    }
+  }
+}
+
 /** Height picture → tangent-space normal map. Smoothed twice first (the bevels are drawn in steps). The rows are flipped to match the colour texture,
  *  which three uploads upside down (a canvas has its first row at the top, a texture at v = 0). */
 function normalFromHeight(src: HTMLCanvasElement, strength: number) {
@@ -330,6 +366,11 @@ export const PAINTERS: Record<string, () => Painted> = {
     for (let i = 0; i < 700; i++) { const x = p.r(0, p.s), y = p.r(0, p.s), a = p.r(0, 6.3), l = p.r(3, 9); p.col.strokeStyle = css(p.rnd() < 0.5 ? [214, 186, 110] : [98, 78, 50], p.r(0.3, 0.7)); p.col.lineWidth = 1; p.col.beginPath(); p.col.moveTo(x, y); p.col.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); p.col.stroke(); }
     mottle(p, 0.25, 112); return finish(p, 'mud', 6);
   },
+  // the fields: young crop on the farm's first field, ripe wheat, leafy greens and ploughed earth on the fields a bigger farm adds
+  field: () => { const p = new Paint(SIZE, 24); cropRows(p, [104, 80, 52], [104, 140, 56], 10, 'shoot'); mottle(p, 0.2, 114); return finish(p, 'field', 5); },
+  wheat: () => { const p = new Paint(SIZE, 25); cropRows(p, [140, 112, 62], [204, 168, 76], 6, 'stalk'); mottle(p, 0.18, 115); return finish(p, 'wheat', 5); },
+  greens: () => { const p = new Paint(SIZE, 26); cropRows(p, [96, 72, 46], [88, 132, 56], 6, 'leaf'); mottle(p, 0.18, 116); return finish(p, 'greens', 6); },
+  furrows: () => { const p = new Paint(SIZE, 27); cropRows(p, [120, 90, 58], [120, 90, 58], 6, 'shoot'); mottle(p, 0.22, 117); return finish(p, 'furrows', 7); },
   // half-timbered panel: oak frame, middle post and two braces over plaster infill (one panel per tile, as before)
   timber: () => {
     const p = new Paint(SIZE, 23), s = p.s, oak: RGB = [84, 58, 36], fw = s * 0.045, pw = s * 0.03, bw = s * 0.026;

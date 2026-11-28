@@ -8,6 +8,7 @@ import { PEN_HALF_DEPTH, PEN_HALF_WIDTH } from '../pasture';
 import { makeBoat } from './field';
 import { tileableNoise } from './water';
 import { painted, PAINTERS } from './painted';
+import { chamferBox, bevelFor } from './chamfer';
 
 // ---------- procedural textures & materials ----------
 const TILE = 2; // one texture repeat covers 2 world units
@@ -77,7 +78,8 @@ function makeMats() {
     slate: pt('slate'),
     trampled: std(grainTile([96, 75, 56], (_u, _v, wear, grit) => 0.96 + 0.62 * wear + 0.25 * grit)),
     wallow: std(grainTile([85, 68, 54], (u, v, wear, grit) => 0.97 + 0.43 * wear + 0.10 * grit + 0.05 * wave(u * 2 - v * 3)), { roughness: 0.67 }),
-    field: std(tex((g, s) => { g.fillStyle = '#7b8c3e'; g.fillRect(0, 0, s, s); for (let i = 0; i < 10; i++) { g.fillStyle = i % 2 ? 'rgba(180,170,70,.55)' : 'rgba(80,60,30,.35)'; g.fillRect(0, i * s / 10, s, s / 10 - 3); } speckle(g, s, 500, 0.15); }), { roughness: 1 }),
+    field: pt('field', { roughness: 1 }),
+    wheat: pt('wheat', { roughness: 1 }), greens: pt('greens', { roughness: 1 }), furrows: pt('furrows', { roughness: 1 }),
     // garden and yard materials for the design options: furrowed soil, leafy foliage, straw and bark, so beds, bushes and stacks read as real things up close
     soil: std(tex((g, s) => { g.fillStyle = '#4b3523'; g.fillRect(0, 0, s, s); for (let i = 0; i < 8; i++) { g.fillStyle = i % 2 ? 'rgba(15,8,4,.4)' : 'rgba(135,100,68,.32)'; g.fillRect(0, i * s / 8, s, s / 8 - 5); } speckle(g, s, 1600, 0.3); }), { roughness: 1 }),
     leaf: std(tex((g, s) => { g.fillStyle = '#4f8a3c'; g.fillRect(0, 0, s, s); for (let i = 0; i < 300; i++) { g.fillStyle = Math.random() > 0.5 ? `rgba(160,205,95,${0.16 + 0.22 * Math.random()})` : `rgba(18,58,24,${0.2 + 0.22 * Math.random()})`; g.beginPath(); g.ellipse(Math.random() * s, Math.random() * s, 2 + Math.random() * 7, 1 + Math.random() * 4, Math.random() * 3, 0, 7); g.fill(); } }), { roughness: 1 }),
@@ -144,13 +146,15 @@ class B {
   }
   private add<T extends THREE.Object3D>(o: T, x: number, y: number, z: number) { o.position.set(x, y, z); o.traverse(c => { const m = c as THREE.Mesh; m.castShadow = true; m.receiveShadow = true; if (m.isMesh) { this.shade(m.geometry, y); if (this.roof && m.material === M().tile) m.material = roofTile(this.roof); } }); this.g.add(o); return o; }
   box(w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0, ry = 0) {
-    const geo = new THREE.BoxGeometry(w, h, d); uvBox(geo, w, h, d);
+    // soft edges on anything big enough to show them (see chamfer.ts); small trim stays a plain box
+    const r = bevelFor(w, h, d), geo = r > 0 ? chamferBox(w, h, d, r, TILE) : new THREE.BoxGeometry(w, h, d);
+    if (!r) uvBox(geo as THREE.BoxGeometry, w, h, d);
     const m = this.add(new THREE.Mesh(geo, mat), x, y + h / 2, z); m.rotation.y = ry; return m;
   }
   /** Gable roof: ridge along local X, w = ridge length, d = span across. It has a thick lip at the eaves, rafter tails
    *  poking out underneath and a ridge beam that sticks out past the gable ends, so it reads as a real overhanging roof. */
   gable(w: number, d: number, h: number, mat: THREE.Material, x = 0, y = 0, z = 0, o = 0.35) {
-    const lip = mat === M().thatch ? 0.34 : 0.17, e = d / 2 + o;
+    const lip = mat === M().thatch ? 0.42 : 0.24, e = d / 2 + o;   // a thick eave: the roofs read chunky from the game's camera
     const sh = new THREE.Shape(); sh.moveTo(-e, -lip); sh.lineTo(e, -lip); sh.lineTo(e, 0); sh.lineTo(0, h); sh.lineTo(-e, 0); sh.closePath();
     const geo = new THREE.ExtrudeGeometry(sh, { depth: w + o * 2, bevelEnabled: false });
     geo.translate(0, 0, -(w + o * 2) / 2); geo.rotateY(Math.PI / 2);
@@ -165,7 +169,7 @@ class B {
     if (o >= 0.3 && w >= 2) {
       const tail = new THREE.BoxGeometry(0.13, 0.17, 0.55);
       for (let k = -w / 2 + 0.35; k <= w / 2 - 0.3; k += 0.8) for (const sd of [-1, 1]) { const t = new THREE.Mesh(tail, wood); t.position.set(k, -lip - 0.06, sd * (e - 0.28)); t.rotation.x = sd * 0.25; grp.add(t); }
-      const ridge = new THREE.Mesh(new THREE.BoxGeometry(w + o * 2 + 0.7, 0.17, 0.17), wood); ridge.position.set(0, h + 0.03, 0); grp.add(ridge);
+      const ridge = new THREE.Mesh(chamferBox(w + o * 2 + 0.7, 0.2, 0.2, 0.05, TILE), wood); ridge.position.set(0, h + 0.03, 0); grp.add(ridge);
       for (const sd of [-1, 1]) { const knob = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), wood); knob.position.set(sd * (w / 2 + o + 0.38), h + 0.03, 0); grp.add(knob); }
     }
     return this.add(grp, x, y, z);
@@ -355,6 +359,8 @@ const wallMat = (t: number) => [M().wood, M().plaster, M().stone, M().stone][t];
 const roofMat = (t: number) => [M().thatch, M().tile, M().slate, M().slate][t];
 
 
+const cropRows = new Map<number, THREE.Material>();
+const cropRow = (c: number) => { let m = cropRows.get(c); if (!m) cropRows.set(c, m = new THREE.MeshStandardMaterial({ color: c, roughness: 1 })); return m; };
 const farm: Model = b => {
   const t = b.t, m = M();
   b.box(10.4, 0.1, 8.4, m.field, 0, 0.02, 1.4);
@@ -370,11 +376,11 @@ const farm: Model = b => {
   }
   if (t === 3) b.flag(-1.2, 4.2, -4.4, 1.8);
   // a bigger farm works more fields: a second beside the first, a third below it and a fourth in the corner (the farm's footprint grows to make room)
-  const crop = (c: number) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 });
-  const extra: [number, number, number, number, number][] = [[5.0, 8.4, 7.9, 1.4, 0xc9a43b], [10.4, 4.6, 0, 8.0, 0x6f9a3a], [5.0, 4.6, 7.9, 8.0, 0x8a6a3a]];
+  // (painted crops: ripe wheat, leafy greens, ploughed earth; each with a raised row of its own colour every 1.2 units)
+  const extra: [number, number, number, number, THREE.Material, number][] = [[5.0, 8.4, 7.9, 1.4, m.wheat, 0xd2ad4c], [10.4, 4.6, 0, 8.0, m.greens, 0x4d7f33], [5.0, 4.6, 7.9, 8.0, m.furrows, 0x6b4a28]];
   for (let i = 0; i < Math.min(3, t); i++) {
-    const [w, d, x, z, c] = extra[i]; b.box(w, 0.1, d, crop(c), x, 0.02, z);
-    for (let k = 0; k < Math.floor(d / 1.2); k++) b.box(w - 0.4, 0.06, 0.18, crop(c === 0xc9a43b ? 0xe0bc4a : c === 0x6f9a3a ? 0x4f8a2f : 0x6b4a28), x, 0.1, z - d / 2 + 0.7 + k * 1.2);   // crop rows
+    const [w, d, x, z, mat, row] = extra[i]; b.box(w, 0.1, d, mat, x, 0.02, z);
+    for (let k = 0; k < Math.floor(d / 1.2); k++) b.box(w - 0.4, 0.06, 0.18, cropRow(row), x, 0.1, z - d / 2 + 0.7 + k * 1.2);   // crop rows
   }
 };
 
@@ -2443,7 +2449,7 @@ export function auditModel(kind: number, tier: number, opts: number) {
       const pc = p.box.getCenter(new THREE.Vector3()), qc = q.box.getCenter(new THREE.Vector3()), oy = Math.min(p.box.max.y, q.box.max.y) - Math.max(p.box.min.y, q.box.min.y), hp = p.box.max.y - p.box.min.y, hq = q.box.max.y - q.box.min.y;
       if (Math.hypot(pc.x - qc.x, pc.z - qc.z) < 0.7 && oy > 0.35 * Math.min(hp, hq)) out.push(`stacked roofs: ${p.type} ${f(p.box)} and ${q.type} ${f(q.box)}`);
     });
-    parts.forEach((q, j) => { if (j <= i || q.mat !== p.mat || vol(p.box) < 0.5 || vol(q.box) < 0.5) return; const x = p.box.clone().intersect(q.box); if (!x.isEmpty() && vol(x) > 0.7 * Math.min(vol(p.box), vol(q.box)) && p.type === q.type && p.type !== 'Box') out.push(`doubled: ${p.type} ${f(p.box)} with ${f(q.box)}`); });
+    parts.forEach((q, j) => { if (j <= i || q.mat !== p.mat || vol(p.box) < 0.5 || vol(q.box) < 0.5) return; const x = p.box.clone().intersect(q.box); if (!x.isEmpty() && vol(x) > 0.7 * Math.min(vol(p.box), vol(q.box)) && p.type === q.type && p.type !== 'Box' && p.type !== 'ChamferBox') out.push(`doubled: ${p.type} ${f(p.box)} with ${f(q.box)}`); });
   });
   return out;
 }
