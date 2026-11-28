@@ -31,6 +31,9 @@ const cone = (r: number, h: number, hex: number, x = 0, y = 0, z = 0, seg = 8) =
 const WOOD = 0x6b4a2e, IRON = 0xaab0b8, DARK = 0x3a3a40, LEATHER = 0x5a3b22;
 
 // ---- body parts (pivot at the joint) ----
+/** The storybook proportions: a big head (and hats to fit it) on a slightly rounder body. The joints, gait and poses are unchanged; only the part shapes grow,
+ *  about the neck, so everything that hangs on the head (hats, helmets) still sits on it. */
+export const HEAD_SCALE = 1.38, HEAD_LIFT = 0.035, TORSO_ROUND = 1.12;
 const clothFolds = (x: number, y: number, z: number) => {
   const around = Math.atan2(x, z);
   return 0.92 + 0.07 * Math.cos(around * 5 + y * 3) + 0.03 * Math.sin(y * 15 + around);
@@ -43,7 +46,7 @@ function geoTorso() {
     shadeVertices(tint(tunic, 0xffffff), clothFolds), tint(belt, 0x868078), tint(collar, 0xe4d9c7),
     box(0.088, 0.074, 0.027, 0xba9b69, 0, 0.12, 0.194),
     box(0.04, 0.12, 0.018, 0xada395, 0, 0.53, 0.145),
-  ]);
+  ]).scale(TORSO_ROUND, 1, TORSO_ROUND);
 }
 function geoHead() {
   const face = new THREE.SphereGeometry(0.155, 10, 7).scale(0.94, 1.13, 0.97).translate(0, 0.135, 0);
@@ -55,7 +58,7 @@ function geoHead() {
       box(0.033, 0.014, 0.025, 0x4e4036, side * 0.059, 0.158, 0.135),
       box(0.031, 0.065, 0.052, 0xe5cbb8, side * 0.143, 0.123, 0.003),
     ]),
-  ]);
+  ]).scale(HEAD_SCALE, HEAD_SCALE, HEAD_SCALE).translate(0, HEAD_LIFT, 0);
 }
 const geoThigh = () => T(tint(new THREE.BoxGeometry(0.17, 0.4, 0.19), 0xffffff), 0, -0.2, 0);
 const geoShin = () => merge([T(tint(new THREE.BoxGeometry(0.15, 0.38, 0.17), 0xffffff), 0, -0.19, 0), T(tint(new THREE.BoxGeometry(0.14, 0.09, 0.27), 0x2a2018), 0, -0.36, 0.05)]);
@@ -169,16 +172,16 @@ export class Crowd {
     this.uArmL = mk(geoUpperArm(), MAX, 'linen'); this.uArmR = mk(geoUpperArm(), MAX, 'linen'); this.foreL = mk(geoFore()); this.foreR = mk(geoFore());
     this.dress = mk(geoDress(), MAX, 'linen'); this.horse = mk(horseGeo(), MAX, 'fur'); this.horseLeg = mk(horseLegGeo(), MAX * 4);
     for (const m of [this.head, this.shinL, this.shinR, this.foreL, this.foreR]) m.castShadow = false;   // too small to matter in the shadow pass
-    this.hats = HATS.map(h => mk(h(), MAX, undefined, false)); this.tools = TOOLS.map(t => mk(t(), MAX, undefined, false)); this.shields = SHIELDS.map(s => mk(s()));
+    this.hats = HATS.map(h => mk(h().scale(HEAD_SCALE, HEAD_SCALE, HEAD_SCALE).translate(0, HEAD_LIFT, 0), MAX, undefined, false)); this.tools = TOOLS.map(t => mk(t(), MAX, undefined, false)); this.shields = SHIELDS.map(s => mk(s()));
     this.n.hats = new Array(this.hats.length).fill(0);
     this.n.tools = new Array(this.tools.length).fill(0);
     this.n.shields = new Array(this.shields.length).fill(0);
     this.distantBody = mk(merge([
-      box(0.43, 0.67, 0.27, 0xffffff, 0, 1.04, 0),
+      box(0.43 * TORSO_ROUND, 0.67, 0.27 * TORSO_ROUND, 0xffffff, 0, 1.04, 0),
       box(0.14, 0.68, 0.16, 0x6c6864, -0.11, 0.35, -0.045),
       box(0.14, 0.68, 0.16, 0x6c6864, 0.11, 0.35, 0.045),
     ]));
-    this.distantHead = mk(cyl(0.14, 0.15, 0.27, 0xffffff, 0, 1.51, 0, 5));
+    this.distantHead = mk(cyl(0.14 * HEAD_SCALE, 0.15 * HEAD_SCALE, 0.27 * HEAD_SCALE, 0xffffff, 0, 1.51 + 0.04 + HEAD_LIFT, 0, 5));   // (the big head of the near figures)
     this.distantBody.castShadow = this.distantHead.castShadow = false;
     this.all = [this.torso, this.head, this.thighL, this.thighR, this.shinL, this.shinR, this.uArmL, this.uArmR, this.foreL, this.foreR, this.dress, this.horse, this.horseLeg, this.distantBody, this.distantHead, ...this.hats, ...this.tools, ...this.shields];
     this.counts = new Array(this.all.length).fill(0);

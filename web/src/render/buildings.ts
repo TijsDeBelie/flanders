@@ -7,6 +7,9 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { PEN_HALF_DEPTH, PEN_HALF_WIDTH } from '../pasture';
 import { makeBoat } from './field';
 import { tileableNoise } from './water';
+import { painted, PAINTERS } from './painted';
+import { chamferBox, bevelFor } from './chamfer';
+import { addSnow, keepSnow } from './snow';
 
 // ---------- procedural textures & materials ----------
 const TILE = 2; // one texture repeat covers 2 world units
@@ -20,7 +23,6 @@ function tex(paint: (g: CanvasRenderingContext2D, s: number) => void, s = 256) {
 const speckle = (g: CanvasRenderingContext2D, s: number, n: number, a: number) => {
   for (let i = 0; i < n; i++) { const v = Math.random() > 0.5 ? 255 : 0; g.fillStyle = `rgba(${v},${v},${v},${Math.random() * a})`; g.fillRect(Math.random() * s, Math.random() * s, 1 + Math.random() * 2, 1 + Math.random() * 2); }
 };
-const fract = (n: number) => n - Math.floor(n);
 const wave = (n: number) => Math.cos(n * Math.PI * 2);
 type Grain = (u: number, v: number, wear: number, grit: number) => number;
 
@@ -39,42 +41,6 @@ function grainTile(colour: [number, number, number], grain: Grain) {
   });
 }
 
-const timberGrain: Grain = (u, v, wear, grit) => {
-  const plank = u * 6, along = fract(plank);
-  const seam = 1 - Math.min(1, Math.min(along, 1 - along) * 26);
-  const crown = Math.max(0, 1 - Math.abs(along - 0.07) * 15);
-  const drift = wear * 0.46 + 0.28 * wave(v * 2 + u * 4);
-  const fibres = wave(u * 54 + drift) * 0.06 + wave(u * 103 - drift * 1.4) * 0.028;
-  const board = [0.035, -0.055, 0.08, -0.03, -0.075, 0.035][Math.floor(plank)];
-  return 1 + board + fibres + wear * 0.20 + grit * 0.075 - seam * 0.27 + crown * 0.09;
-};
-
-const thatchGrain: Grain = (u, v, wear, grit) => {
-  const course = fract(v * 3 + 0.04 * wave(u * 5) + 0.12 * wear);
-  const overlap = 1 - Math.min(1, course * 8);
-  const straw = wave(u * 63 + 0.30 * wave(v * 2 + u * 3) + wear * 0.5);
-  return 1 + 0.2 * wear + 0.075 * straw + 0.07 * grit - 0.19 * overlap;
-};
-
-const tileGrain: Grain = (u, v, wear, grit) => {
-  const row = v * 6;
-  const across = fract(u * 6 + (Math.floor(row) % 2) * 0.5);
-  const edge = Math.min(across, 1 - across);
-  const lip = 1 - Math.min(1, fract(row - 0.11 * (1 - (2 * across - 1) ** 2)) * 7);
-  const joint = 1 - Math.min(1, edge * 27);
-  return 1 + wear * 0.24 + 0.09 * wave(across - 0.5) - 0.24 * lip - 0.19 * joint + grit * 0.13;
-};
-function rows(g: CanvasRenderingContext2D, s: number, base: string, lines: string, rowsN: number, stagger: boolean, cols: number, jitter = 18) {
-  g.fillStyle = base; g.fillRect(0, 0, s, s);
-  const rh = s / rowsN, cw = s / cols;
-  for (let r = 0; r < rowsN; r++) for (let c = -1; c < cols; c++) {
-    const off = stagger && r % 2 ? cw / 2 : 0, v = Math.random() * jitter - jitter / 2;
-    g.fillStyle = `rgba(${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${Math.abs(v) / 90})`;
-    g.fillRect(c * cw + off, r * rh, cw, rh);
-    g.strokeStyle = lines; g.lineWidth = 2; g.strokeRect(c * cw + off, r * rh, cw, rh);
-  }
-  speckle(g, s, 500, 0.12);
-}
 /** Derive a tangent-space normal map from a painted texture: dark mortar, grooves and gaps become recesses, light parts stand proud. */
 function normalFrom(c: HTMLCanvasElement, strength: number) {
   const s = c.width, src = c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, s, s).data, h = new Float32Array(s * s);
@@ -93,37 +59,28 @@ let _m: ReturnType<typeof makeMats> | null = null;
 function makeMats() {
   const std = (map: THREE.Texture | null, extra: THREE.MeshStandardMaterialParameters = {}) => new THREE.MeshStandardMaterial({ map, normalMap: map ? normalFrom(map.userData.canvas, 3.2) : null, normalScale: new THREE.Vector2(1, 1), vertexColors: true, roughness: 0.92, metalness: 0, ...extra });
   const col = (c: number, extra: THREE.MeshStandardMaterialParameters = {}) => new THREE.MeshStandardMaterial({ color: c, vertexColors: true, roughness: 0.9, ...extra });
+  // the walls and roofs: hand-painted, piece by piece (see painted.ts)
+  const pt = (name: keyof typeof PAINTERS, extra: THREE.MeshStandardMaterialParameters = {}) => { const t = painted(name); return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normal, normalScale: new THREE.Vector2(1, 1), vertexColors: true, roughness: 0.92, metalness: 0, ...extra }); };
   return {
-    wood: std(grainTile([124, 91, 59], timberGrain), { normalScale: new THREE.Vector2(0.65, 0.65) }),
-    darkwood: std(grainTile([77, 56, 38], timberGrain), { normalScale: new THREE.Vector2(0.65, 0.65) }),
-    plaster: std(tex((g, s) => { g.fillStyle = '#e4d6b4'; g.fillRect(0, 0, s, s); speckle(g, s, 1400, 0.16); for (let i = 0; i < 20; i++) { g.fillStyle = 'rgba(120,100,60,.05)'; g.beginPath(); g.arc(Math.random() * s, Math.random() * s, 8 + Math.random() * 14, 0, 7); g.fill(); } })),
-    // half-timbered panel: oak frame, diagonal brace and plaster infill (one panel per texture tile)
-    timber: std(tex((g, s) => {
-      g.fillStyle = '#e8dcbf'; g.fillRect(0, 0, s, s); speckle(g, s, 900, 0.14);
-      g.strokeStyle = '#4a3220'; g.lineCap = 'square';
-      g.lineWidth = 11; g.strokeRect(5, 5, s - 10, s - 10);
-      g.lineWidth = 7; g.beginPath(); g.moveTo(s / 2, 4); g.lineTo(s / 2, s - 4); g.stroke();
-      g.lineWidth = 6; g.beginPath(); g.moveTo(6, s - 6); g.lineTo(s / 2 - 3, s * 0.45); g.moveTo(s - 6, s - 6); g.lineTo(s / 2 + 3, s * 0.45); g.stroke();
-    })),
-    // Flemish brickwork with pale stone bands
-    flemish: std(tex((g, s) => {
-      rows(g, s, '#a8553a', 'rgba(60,30,22,.8)', 8, true, 5, 55);
-      for (const y of [s * 0.25, s * 0.75]) { g.fillStyle = '#d8cfba'; g.fillRect(0, y - 4, s, 8); g.fillStyle = 'rgba(60,50,40,.35)'; g.fillRect(0, y + 4, s, 1.5); }
-      speckle(g, s, 400, 0.12);
-    })),
-    mud: std(tex((g, s) => { g.fillStyle = '#a58a62'; g.fillRect(0, 0, s, s); speckle(g, s, 1800, 0.25); for (let i = 0; i < 14; i++) { g.fillStyle = 'rgba(80,60,35,.12)'; g.beginPath(); g.arc(Math.random() * s, Math.random() * s, 6 + Math.random() * 14, 0, 7); g.fill(); } })),
-    cobble: std(tex((g, s) => { g.fillStyle = '#6f6b64'; g.fillRect(0, 0, s, s); for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { const v = 120 + Math.random() * 70; g.fillStyle = `rgb(${v},${v - 4},${v - 10})`; g.beginPath(); g.ellipse(x * s / 8 + s / 16 + (y % 2) * s / 16, y * s / 8 + s / 16, s / 18, s / 22, 0, 0, 7); g.fill(); } })),
+    wood: pt('wood', { normalScale: new THREE.Vector2(0.8, 0.8) }),
+    darkwood: pt('darkwood', { normalScale: new THREE.Vector2(0.8, 0.8) }),
+    plaster: pt('plaster'),
+    timber: pt('timber'),
+    flemish: pt('flemish'),
+    mud: pt('mud'),
+    cobble: pt('cobble'),
     stoneMat: col(0xbdb4a0),
     shutter: col(0x3f6a4a), shutterRed: col(0x8a2f26), shutterBlue: col(0x2f4f7a),
-    stone: std(tex((g, s) => rows(g, s, '#9a968d', 'rgba(50,48,44,.7)', 5, true, 4, 40))),
-    darkstone: std(tex((g, s) => rows(g, s, '#6e6c68', 'rgba(25,25,25,.7)', 5, true, 4, 40))),
-    brick: std(tex((g, s) => rows(g, s, '#a4553b', 'rgba(70,35,25,.8)', 8, true, 5, 50))),
-    thatch: std(grainTile([184, 153, 82], thatchGrain), { normalScale: new THREE.Vector2(0.58, 0.58) }),
-    tile: std(grainTile([170, 85, 54], tileGrain)),
-    slate: std(grainTile([81, 92, 107], tileGrain)),
+    stone: pt('stone'),
+    darkstone: pt('darkstone'),
+    brick: pt('brick'),
+    thatch: pt('thatch', { normalScale: new THREE.Vector2(0.75, 0.75) }),
+    tile: pt('tile'),
+    slate: pt('slate'),
     trampled: std(grainTile([96, 75, 56], (_u, _v, wear, grit) => 0.96 + 0.62 * wear + 0.25 * grit)),
     wallow: std(grainTile([85, 68, 54], (u, v, wear, grit) => 0.97 + 0.43 * wear + 0.10 * grit + 0.05 * wave(u * 2 - v * 3)), { roughness: 0.67 }),
-    field: std(tex((g, s) => { g.fillStyle = '#7b8c3e'; g.fillRect(0, 0, s, s); for (let i = 0; i < 10; i++) { g.fillStyle = i % 2 ? 'rgba(180,170,70,.55)' : 'rgba(80,60,30,.35)'; g.fillRect(0, i * s / 10, s, s / 10 - 3); } speckle(g, s, 500, 0.15); }), { roughness: 1 }),
+    field: pt('field', { roughness: 1 }),
+    wheat: pt('wheat', { roughness: 1 }), greens: pt('greens', { roughness: 1 }), furrows: pt('furrows', { roughness: 1 }),
     // garden and yard materials for the design options: furrowed soil, leafy foliage, straw and bark, so beds, bushes and stacks read as real things up close
     soil: std(tex((g, s) => { g.fillStyle = '#4b3523'; g.fillRect(0, 0, s, s); for (let i = 0; i < 8; i++) { g.fillStyle = i % 2 ? 'rgba(15,8,4,.4)' : 'rgba(135,100,68,.32)'; g.fillRect(0, i * s / 8, s, s / 8 - 5); } speckle(g, s, 1600, 0.3); }), { roughness: 1 }),
     leaf: std(tex((g, s) => { g.fillStyle = '#4f8a3c'; g.fillRect(0, 0, s, s); for (let i = 0; i < 300; i++) { g.fillStyle = Math.random() > 0.5 ? `rgba(160,205,95,${0.16 + 0.22 * Math.random()})` : `rgba(18,58,24,${0.2 + 0.22 * Math.random()})`; g.beginPath(); g.ellipse(Math.random() * s, Math.random() * s, 2 + Math.random() * 7, 1 + Math.random() * 4, Math.random() * 3, 0, 7); g.fill(); } }), { roughness: 1 }),
@@ -149,12 +106,18 @@ function makeMats() {
     stained2: col(0xd84a5a, { emissive: 0xaa2233, emissiveIntensity: 0.9 }),
   };
 }
-const M = () => (_m ??= makeMats());
+const M = () => (_m ??= withSnow(makeMats()));
+/** The shared materials take snow in winter too (walls and fences draw with them without passing through `B.add`). */
+function withSnow<T extends Record<string, THREE.Material | THREE.Material[]>>(mats: T): T { for (const m of Object.values(mats)) snowOn(m); return mats; }
 /** Wall materials by tier: palisade, timber, stone, battlemented stone. */
 /** Kinds drawn by something else (walls, fences and gates by the Walls mesh, moats by the terrain): an empty placeholder keeps the indices lined up. */
 const PLAIN = new Set([2, 21, 22, 24, 32, 33, 34, 37, 38]);
 export const wallMats = (): THREE.MeshStandardMaterial[] => [M().wood, M().timber, M().stone, M().stone];
 
+/** Snow in winter (snow.ts) on every opaque surface of a building that does not glow (lit windows, fires and coloured glass stay clear). */
+function snowOn(mat: THREE.Material | THREE.Material[]) {
+  for (const m of Array.isArray(mat) ? mat : [mat]) { const s = m as THREE.MeshStandardMaterial; const glow = s.emissive ? s.emissive.getHex() !== 0 && (s.emissiveIntensity ?? 0) >= 0.8 : false; if (!m.transparent && (s.isMeshStandardMaterial || (m as THREE.MeshLambertMaterial).isMeshLambertMaterial) && !glow && m !== _m?.glass) addSnow(m); }
+}
 // ---------- geometry helpers ----------
 function uvBox(g: THREE.BoxGeometry, w: number, h: number, d: number) {
   const uv = g.attributes.uv, ext = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
@@ -188,15 +151,17 @@ class B {
     }
     geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
   }
-  private add<T extends THREE.Object3D>(o: T, x: number, y: number, z: number) { o.position.set(x, y, z); o.traverse(c => { const m = c as THREE.Mesh; m.castShadow = true; m.receiveShadow = true; if (m.isMesh) { this.shade(m.geometry, y); if (this.roof && m.material === M().tile) m.material = roofTile(this.roof); } }); this.g.add(o); return o; }
+  private add<T extends THREE.Object3D>(o: T, x: number, y: number, z: number) { o.position.set(x, y, z); o.traverse(c => { const m = c as THREE.Mesh; m.castShadow = true; m.receiveShadow = true; if (m.isMesh) { this.shade(m.geometry, y); if (this.roof && m.material === M().tile) m.material = roofTile(this.roof); snowOn(m.material); } }); this.g.add(o); return o; }
   box(w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0, ry = 0) {
-    const geo = new THREE.BoxGeometry(w, h, d); uvBox(geo, w, h, d);
+    // soft edges on anything big enough to show them (see chamfer.ts); small trim stays a plain box
+    const r = bevelFor(w, h, d), geo = r > 0 ? chamferBox(w, h, d, r, TILE) : new THREE.BoxGeometry(w, h, d);
+    if (!r) uvBox(geo as THREE.BoxGeometry, w, h, d);
     const m = this.add(new THREE.Mesh(geo, mat), x, y + h / 2, z); m.rotation.y = ry; return m;
   }
   /** Gable roof: ridge along local X, w = ridge length, d = span across. It has a thick lip at the eaves, rafter tails
    *  poking out underneath and a ridge beam that sticks out past the gable ends, so it reads as a real overhanging roof. */
   gable(w: number, d: number, h: number, mat: THREE.Material, x = 0, y = 0, z = 0, o = 0.35) {
-    const lip = mat === M().thatch ? 0.34 : 0.17, e = d / 2 + o;
+    const lip = mat === M().thatch ? 0.42 : 0.24, e = d / 2 + o;   // a thick eave: the roofs read chunky from the game's camera
     const sh = new THREE.Shape(); sh.moveTo(-e, -lip); sh.lineTo(e, -lip); sh.lineTo(e, 0); sh.lineTo(0, h); sh.lineTo(-e, 0); sh.closePath();
     const geo = new THREE.ExtrudeGeometry(sh, { depth: w + o * 2, bevelEnabled: false });
     geo.translate(0, 0, -(w + o * 2) / 2); geo.rotateY(Math.PI / 2);
@@ -211,7 +176,7 @@ class B {
     if (o >= 0.3 && w >= 2) {
       const tail = new THREE.BoxGeometry(0.13, 0.17, 0.55);
       for (let k = -w / 2 + 0.35; k <= w / 2 - 0.3; k += 0.8) for (const sd of [-1, 1]) { const t = new THREE.Mesh(tail, wood); t.position.set(k, -lip - 0.06, sd * (e - 0.28)); t.rotation.x = sd * 0.25; grp.add(t); }
-      const ridge = new THREE.Mesh(new THREE.BoxGeometry(w + o * 2 + 0.7, 0.17, 0.17), wood); ridge.position.set(0, h + 0.03, 0); grp.add(ridge);
+      const ridge = new THREE.Mesh(chamferBox(w + o * 2 + 0.7, 0.2, 0.2, 0.05, TILE), wood); ridge.position.set(0, h + 0.03, 0); grp.add(ridge);
       for (const sd of [-1, 1]) { const knob = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), wood); knob.position.set(sd * (w / 2 + o + 0.38), h + 0.03, 0); grp.add(knob); }
     }
     return this.add(grp, x, y, z);
@@ -299,7 +264,7 @@ export function roofTile(r: number): THREE.Material {
   let m = roofMats.get(r);
   if (!m) {
     const c = (M().tile as THREE.MeshStandardMaterial).clone(), t = ROOFS[r]?.rgb ?? ROOFS[0].rgb, base = ROOFS[0].rgb;
-    c.color.setRGB(t[0] / base[0], t[1] / base[1], t[2] / base[2]); roofMats.set(r, c); m = c;
+    c.color.setRGB(t[0] / base[0], t[1] / base[1], t[2] / base[2]); keepSnow(M().tile, c); roofMats.set(r, c); m = c;
   }
   return m;
 }
@@ -317,7 +282,7 @@ export function setNightLight(n: number) {
 function variantOf(mat: THREE.Material, v: number): THREE.Material {
   const key = mat.uuid + ':' + v; let c = variantCache.get(key);
   if (!c) {
-    c = mat.clone(); const sm = c as THREE.MeshStandardMaterial;
+    c = mat.clone(); keepSnow(mat, c); const sm = c as THREE.MeshStandardMaterial;
     if (mat === M().glass && v !== -1) { glassVariants.push(sm); sm.emissive.setRGB(1, 0.72, 0.35); sm.emissiveIntensity = nightLevel * 1.7; }
     if (v === -1) { sm.color.multiplyScalar(0.22); sm.roughness = 1; if (sm.emissive) sm.emissive.setHex(0x1a0600); }
     else { const shade = 0.88 + v * 0.07; sm.color.multiplyScalar(shade); sm.color.offsetHSL((v - 1.5) * 0.012, 0, 0); }
@@ -348,7 +313,7 @@ function foldKey(mat: THREE.Material): string | null {
 /** One shared material per surface: the first material's settings with a white base colour, drawing the vertex colours. */
 function foldedMaterial(key: string, like: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
   let m = foldedMats.get(key);
-  if (!m) { m = like.clone(); m.color.setRGB(1, 1, 1); m.vertexColors = true; m.onBeforeCompile = like.onBeforeCompile; m.needsUpdate = true; foldedMats.set(key, m); }
+  if (!m) { m = like.clone(); m.color.setRGB(1, 1, 1); m.vertexColors = true; m.onBeforeCompile = like.onBeforeCompile; m.customProgramCacheKey = like.customProgramCacheKey; m.needsUpdate = true; foldedMats.set(key, m); }
   return m;
 }
 /** The part's vertex colours times the material's base colour (white vertex colours when the material drew none), as floats; null if the part cannot be baked. */
@@ -401,6 +366,8 @@ const wallMat = (t: number) => [M().wood, M().plaster, M().stone, M().stone][t];
 const roofMat = (t: number) => [M().thatch, M().tile, M().slate, M().slate][t];
 
 
+const cropRows = new Map<number, THREE.Material>();
+const cropRow = (c: number) => { let m = cropRows.get(c); if (!m) cropRows.set(c, m = new THREE.MeshStandardMaterial({ color: c, roughness: 1 })); return m; };
 const farm: Model = b => {
   const t = b.t, m = M();
   b.box(10.4, 0.1, 8.4, m.field, 0, 0.02, 1.4);
@@ -416,11 +383,11 @@ const farm: Model = b => {
   }
   if (t === 3) b.flag(-1.2, 4.2, -4.4, 1.8);
   // a bigger farm works more fields: a second beside the first, a third below it and a fourth in the corner (the farm's footprint grows to make room)
-  const crop = (c: number) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 });
-  const extra: [number, number, number, number, number][] = [[5.0, 8.4, 7.9, 1.4, 0xc9a43b], [10.4, 4.6, 0, 8.0, 0x6f9a3a], [5.0, 4.6, 7.9, 8.0, 0x8a6a3a]];
+  // (painted crops: ripe wheat, leafy greens, ploughed earth; each with a raised row of its own colour every 1.2 units)
+  const extra: [number, number, number, number, THREE.Material, number][] = [[5.0, 8.4, 7.9, 1.4, m.wheat, 0xd2ad4c], [10.4, 4.6, 0, 8.0, m.greens, 0x4d7f33], [5.0, 4.6, 7.9, 8.0, m.furrows, 0x6b4a28]];
   for (let i = 0; i < Math.min(3, t); i++) {
-    const [w, d, x, z, c] = extra[i]; b.box(w, 0.1, d, crop(c), x, 0.02, z);
-    for (let k = 0; k < Math.floor(d / 1.2); k++) b.box(w - 0.4, 0.06, 0.18, crop(c === 0xc9a43b ? 0xe0bc4a : c === 0x6f9a3a ? 0x4f8a2f : 0x6b4a28), x, 0.1, z - d / 2 + 0.7 + k * 1.2);   // crop rows
+    const [w, d, x, z, mat, row] = extra[i]; b.box(w, 0.1, d, mat, x, 0.02, z);
+    for (let k = 0; k < Math.floor(d / 1.2); k++) b.box(w - 0.4, 0.06, 0.18, cropRow(row), x, 0.1, z - d / 2 + 0.7 + k * 1.2);   // crop rows
   }
 };
 
@@ -2489,7 +2456,7 @@ export function auditModel(kind: number, tier: number, opts: number) {
       const pc = p.box.getCenter(new THREE.Vector3()), qc = q.box.getCenter(new THREE.Vector3()), oy = Math.min(p.box.max.y, q.box.max.y) - Math.max(p.box.min.y, q.box.min.y), hp = p.box.max.y - p.box.min.y, hq = q.box.max.y - q.box.min.y;
       if (Math.hypot(pc.x - qc.x, pc.z - qc.z) < 0.7 && oy > 0.35 * Math.min(hp, hq)) out.push(`stacked roofs: ${p.type} ${f(p.box)} and ${q.type} ${f(q.box)}`);
     });
-    parts.forEach((q, j) => { if (j <= i || q.mat !== p.mat || vol(p.box) < 0.5 || vol(q.box) < 0.5) return; const x = p.box.clone().intersect(q.box); if (!x.isEmpty() && vol(x) > 0.7 * Math.min(vol(p.box), vol(q.box)) && p.type === q.type && p.type !== 'Box') out.push(`doubled: ${p.type} ${f(p.box)} with ${f(q.box)}`); });
+    parts.forEach((q, j) => { if (j <= i || q.mat !== p.mat || vol(p.box) < 0.5 || vol(q.box) < 0.5) return; const x = p.box.clone().intersect(q.box); if (!x.isEmpty() && vol(x) > 0.7 * Math.min(vol(p.box), vol(q.box)) && p.type === q.type && p.type !== 'Box' && p.type !== 'ChamferBox') out.push(`doubled: ${p.type} ${f(p.box)} with ${f(q.box)}`); });
   });
   return out;
 }

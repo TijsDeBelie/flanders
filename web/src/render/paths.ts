@@ -42,7 +42,13 @@ export class Paths {
         varying vec3 vRoad; varying vec2 vRU; varying vec2 vWP;
         float rh21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
         float rvn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(rh21(i), rh21(i + vec2(1.0, 0.0)), f.x), mix(rh21(i + vec2(0.0, 1.0)), rh21(i + vec2(1.0, 1.0)), f.x), f.y); }
-        float rnoise(vec2 p) { return rvn(p * 2.1) * 0.5 + rvn(p * 5.3 + 7.1) * 0.3 + rvn(p * 11.7 + 3.3) * 0.2; }`)
+        float rnoise(vec2 p) { return rvn(p * 2.1) * 0.5 + rvn(p * 5.3 + 7.1) * 0.3 + rvn(p * 11.7 + 3.3) * 0.2; }
+        float roadH = 0.5;   // the surface's own brightness: light stones stand proud of dark joints (see the bump below)
+        vec3 roadBump(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {   // (three's perturbNormalArb, which only exists with a bump map)
+          vec3 sx = normalize(dFdx(surf_pos)), sy = normalize(dFdy(surf_pos)), r1 = cross(sy, surf_norm), r2 = cross(surf_norm, sx);
+          float det = dot(sx, r1) * faceDir;
+          return normalize(abs(det) * surf_norm - sign(det) * (dHdxy.x * r1 + dHdxy.y * r2));
+        }`)
         .replace('#include <map_fragment>', `
         {
           // the surface: a layer of the array, or two blended along a ragged line where one surface runs into the next (the noise decides which layer wins at each place)
@@ -51,8 +57,13 @@ export class Paths {
           float w = smoothstep(0.30, 0.70, f + (nz - 0.5) * 0.62);
           vec3 t0 = texture(uRoadTex, vec3(vRU, i0)).rgb;
           vec3 t1 = texture(uRoadTex, vec3(vRU, i1)).rgb;
-          diffuseColor.rgb *= mix(t0, t1, f > 0.001 ? w : 0.0);
+          vec3 tc = mix(t0, t1, f > 0.001 ? w : 0.0);
+          diffuseColor.rgb *= tc;
+          roadH = dot(tc, vec3(0.3, 0.59, 0.11));
         }`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        // the stones catch the sun: a bump from the texture's brightness, close up only (far away it would only shimmer)
+        normal = roadBump(-vViewPosition, normal, vec2(dFdx(roadH), dFdy(roadH)) * 0.55 * (1.0 - smoothstep(25.0, 90.0, length(vViewPosition))), faceDirection);`)
         .replace('#include <color_fragment>', `#include <color_fragment>
         {   // the verge: a damp, darker fringe where the road meets the grass, ragged at two scales (broad lumps and fine blades), and a little grass creeping in over the edge
           float ea = clamp(diffuseColor.a / 0.95, 0.0, 1.0);

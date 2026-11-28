@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { addSnow } from './snow';
 import { freeze, freezeSubtree } from './static';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { trees_in } from '../wasm/game_core.js';
@@ -288,6 +289,7 @@ export class Forest {
           transformed.z += sw * position.y * position.y * 0.1;
         #endif`);
     };
+    addSnow(this.mat);   // snow on the crowns in winter (snow.ts; the distant crowns are lit per vertex and stay green)
     // Distant crowns take the sun and sky into account per vertex, without the point-light loop of a lit material.
     this.farMat.onBeforeCompile = sh => {
       sh.uniforms.uForestSun = this.uSun; sh.uniforms.uForestDaylight = this.uDaylight; sh.uniforms.uForestSky = this.uSkyLight;
