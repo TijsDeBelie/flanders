@@ -33,7 +33,7 @@ import { mountDropdowns } from './dropdown';
 export const keyNames = (a: Action) => keys.binds[a].map(k => `<kbd>${prettyKey(k).toUpperCase()}</kbd>`).join(' ');
 /** What the controls are, written from the real bindings, so the home screen and the help screen can never disagree with the game. */
 export function controlsHtml() {
-  return `<b>Left-click</b> builds and selects · <b>left-drag</b> draws a box round armies · <b>right-click</b> sends the selected army there · <b>right-drag</b> turns the camera · <b>middle-drag</b> or <b>Shift-drag</b> grabs the ground · <b>wheel</b> zooms towards the pointer.<br>Move the camera: ${keyNames('panUp')} forward, ${keyNames('panLeft')} left, ${keyNames('panDown')} back, ${keyNames('panRight')} right · turn: ${keyNames('rotLeft')} ${keyNames('rotRight')} · tilt: ${keyNames('tiltUp')} ${keyNames('tiltDown')} · zoom: ${keyNames('zoomIn')} ${keyNames('zoomOut')} · cancel: ${keyNames('cancel')} · help: ${keyNames('help')}.<br><b>Touchscreen</b> · Tap to build or select; turn on <b>Select more</b> to pick several. Drag to pan (a quick swipe glides on), pinch to zoom, twist with two fingers to turn, and slide two fingers up or down together to tilt. Hold until the ring fills to open the action menu or send an army. Hold <b>Rotate</b> to turn a building back. When a drawing tool is active, drag with one finger to draw and use two fingers to move the map.`;
+  return `<b>Left-click</b> builds and selects · <b>left-drag</b> draws a box round armies · <b>right-click</b> sends the selected army there · <b>Ctrl+right-click</b> marches selected armies with their current spacing · <b>right-drag</b> turns the camera · <b>middle-drag</b> or <b>Shift-drag</b> grabs the ground · <b>wheel</b> zooms towards the pointer.<br>Move the camera: ${keyNames('panUp')} forward, ${keyNames('panLeft')} left, ${keyNames('panDown')} back, ${keyNames('panRight')} right · turn: ${keyNames('rotLeft')} ${keyNames('rotRight')} · tilt: ${keyNames('tiltUp')} ${keyNames('tiltDown')} · zoom: ${keyNames('zoomIn')} ${keyNames('zoomOut')} · cancel: ${keyNames('cancel')} · help: ${keyNames('help')}.<br><b>Touchscreen</b> · Tap to build or select; turn on <b>Select more</b> to pick several. Drag to pan (a quick swipe glides on), pinch to zoom, twist with two fingers to turn, and slide two fingers up or down together to tilt. Hold until the ring fills to open the action menu or send an army. Hold <b>Rotate</b> to turn a building back. When a drawing tool is active, drag with one finger to draw and use two fingers to move the map.`;
 }
 
 /** Names come from other players: never put them into HTML unescaped. */
@@ -126,10 +126,10 @@ interface BattleAction { label: string; title: string; run: () => void; icon?: s
 interface RaidBribe { greed: number; offer?: BribeOffer; pay?: () => void }
 
 const BATTLE_TARGET_HINTS: Record<number, string> = {
-  1: 'Right-click the position to hold',
-  2: 'Right-click the enemy or position to attack',
-  3: 'Right-click a safe position to regroup',
-  4: 'Right-click a point around the enemy to flank',
+  1: 'Click or tap the position to hold',
+  2: 'Click or tap the enemy or position to attack',
+  3: 'Click or tap a safe position to regroup',
+  4: 'Click or tap a point around the enemy to flank',
 };
 
 export interface PeerRow { key: string; name: string; where?: string; online?: boolean; pop: number; buildings: number; sync: string; busy: boolean; rel?: number; married?: boolean; treaties?: number }
@@ -531,10 +531,9 @@ export class UI {
     { const apply = () => { const k = settings().uiScale; document.body.classList.toggle('uiscaled', k !== 1); document.body.style.setProperty('--ui-scale', String(k)); }; apply(); onSettings((_, c) => { if (c.includes('uiScale')) apply(); }); }
     mountSettings($('display-body'), () => this.toast('Anti-aliasing is chosen when the page loads: reload to apply it.', 'info'), () => { this.modal('settings', false); this.h.watch(''); }, text => this.confirm(text, 'Replace', 'Restore this backup?'));
     $('btn-mp').onclick = () => this.modal('mp', true);
-    const setBattleMin = (min: boolean) => { this.battleMin = min; $('battle').hidden = min || $('btn-bell').hidden; this.syncBattleBar(); $('btn-bell').classList.toggle('alert', min); $('btn-bell').setAttribute('aria-pressed', String(!min)); };
     $('btn-home').onclick = () => this.h.goHome();
-    $('battle-close').onclick = () => setBattleMin(true);
-    $('btn-bell').onclick = () => setBattleMin(!this.battleMin);
+    $('battle-close').onclick = () => this.minimizeBattle(true);
+    $('btn-bell').onclick = () => this.minimizeBattle(!this.battleMin);
     document.querySelectorAll<HTMLButtonElement>('[data-steward]').forEach(button => {
       button.onclick = () => this.h.steward(button.dataset.steward as StewardAction);
     });
@@ -1301,6 +1300,13 @@ export class UI {
   }
 
   private battleMin = false;
+  minimizeBattle(min: boolean) {
+    this.battleMin = min;
+    $('battle').hidden = min || $('btn-bell').hidden;
+    this.syncBattleBar();
+    $('btn-bell').classList.toggle('alert', min);
+    $('btn-bell').setAttribute('aria-pressed', String(!min));
+  }
 
   /** Battle status, the click-to-focus shortcut, and the local bandits' payment details. */
   battle(text: string | null, onClick?: () => void, bribe?: RaidBribe) {
@@ -1332,7 +1338,7 @@ export class UI {
 
   private battleHas = false;
   /** The battle bar (headline, orders, actions) shows while any of its parts has something to say. */
-  private syncBattleBar() { $('battle-controls').hidden = $('battle').hidden && !this.battleHas; }
+  private syncBattleBar() { $('battle-controls').classList.toggle('compact-battle', this.battleMin); $('battle-controls').hidden = $('battle').hidden && !this.battleHas; }
   battleControls(actions: BattleAction[] = [], order?: (group: number, mode: number) => void, issued?: Uint8Array) {
     this.battleHas = !!order || actions.length > 0; this.syncBattleBar();
     const bar = $('battle-acts'), orders = $('battle-orders'), group = $('battle-group') as HTMLSelectElement;

@@ -92,7 +92,7 @@ const GOLD = 8;   // the gold store (catalog GD)
 const IRON = 6;   // iron ingots (catalog IR)
 import { bribeOffer, bribeToast, bribeRefusal, BRIBE_CONSEQUENCE } from './bribe';
 import { roleOf, actionsFor, foeFocus, foeTarget, foeCentroid, edgeArrow, shouldAutoJump, foeNear, sallyUnits, newlyLent, drawnUp, isLent, DB_UP, DB_MANUAL_DOWN } from './defence';
-import { arrivalTime, crossingSummary, FIRST_STANCE, objectiveName, orderPins, parseRaidObjective, type BattlePin, type RaidObjective } from './battlefield';
+import { arrivalTime, crossingSummary, marchDestination, FIRST_STANCE, objectiveName, orderPins, parseRaidObjective, type BattlePin, type RaidObjective } from './battlefield';
 import { Identity, Room, tagOf, type Cmd, type Signed, type Hello } from './net/p2p';
 import { aiKey, aiName, pickLayouts, pickSites, raidRequests } from './pve';
 import { cleanName, parseCmd, Sequence } from './net/validate';
@@ -1197,7 +1197,7 @@ function selectDets(ids: number[]) {
   cancelMarchPreview();
   if (ids.length) { const guests = guestIds(); if (ids.some(id => guests.has(id))) { ids = ids.filter(id => !guests.has(id)); if (!ids.length) ui.toast('Soldiers sent by an ally are not yours to command: they fight beside your defenders by themselves. Send them home from the village list.', 'info'); } }
   multiDets = ids; selectedDet = ids[0] ?? null; lv.field.select(ids); ui.setSelectedArmies(ids.length);
-  if (ids.length) { selectKind(null); selectBuilding(null); selectRuin(null); ui.setTab('army'); ui.hint(`${ids.length > 1 ? ids.length + ' armies' : 'Army ' + ids[0]} selected · right-click the ground to march · Shift+click adds or removes one · drag a box to select several · ${keyNames('haltArmy')} halt · ${keyNames('recallArmy')} send home · ${keyNames('cancel')} deselect`); }
+  if (ids.length) { selectKind(null); selectBuilding(null); selectRuin(null); ui.setTab('army'); ui.hint(`${ids.length > 1 ? ids.length + ' armies' : 'Army ' + ids[0]} selected · right-click the ground to march${ids.length > 1 ? ' · Ctrl+right-click keeps army spacing' : ''} · Shift+click adds or removes one · drag a box to select several · ${keyNames('haltArmy')} halt · ${keyNames('recallArmy')} send home · ${keyNames('cancel')} deselect`); }
   else if (selectedKind === null) ui.hint(null);
   showRoute(); updateDets();
 }
@@ -2100,7 +2100,18 @@ function sendBattleOrder(order: BattleOrder, x: number, y: number) {
  *  options exist for both sides (see defence.ts). A raid on your own village also takes the camera there at once when "Jump to raiders" is on. */
 /** The army view over a battle (key K, or the Command screen button): made when first wanted. */
 let cmdScreen: CommandScreen | null = null;
-const commandScreen = () => cmdScreen ??= new CommandScreen(k => unitIcon(k, 16));
+const commandScreen = () => cmdScreen ??= new CommandScreen(k => unitIcon(k, 16), toggleBattleView);
+let battleViewAvailable = false;
+function toggleBattleView() {
+  const opening = !cmdScreen?.active;
+  if (opening && !battleViewAvailable) return;
+  if (pendingBattleOrder) setPendingBattleOrder(null);
+  if (opening && (selectedKind !== null || zoneIdx !== null || rallyPick !== null)) selectKind(null);
+  commandScreen().set(opening);
+  ui.minimizeBattle(!opening);
+  battleBanner();
+  if (!opening) document.querySelector<HTMLButtonElement>('#battle-acts [data-label="Battle view"]')?.focus();
+}
 
 function battleBanner() {
   const list: { v: Village; who: string; mine: boolean; key: string }[] = [{ v: lv, who: 'your village', mine: true, key: 'me' }, ...[...rivals.values()].map(r => ({ v: r.village, who: r.name + "'s village", mine: false, key: r.key }))];
@@ -2121,6 +2132,8 @@ function battleBanner() {
     if (on && !was) announceBoss(v, mine, key);
   }
   const controllable = list.find(({ v, mine }) => v.world.battle_active() && (mine || v.world.battle_tag() === myTag()));
+  battleViewAvailable = !!controllable;
+  if (!battleViewAvailable) cmdScreen?.set(false);
   if (pendingBattleOrder && (pendingBattleOrder.village !== controllable?.v || replay?.target === pendingBattleOrder.village)) setPendingBattleOrder(null);
   for (const { v, who, mine, key } of controllable ? [controllable] : list) {
     const w = v.world;
@@ -2186,8 +2199,8 @@ function battleBanner() {
       + (speed > 1 && role !== 'watch' ? ' · Normal speed during battle' : '');
     ui.battle(`${icon('attack', 18, { mono: true })} ${lair ? 'Battle at the lair' : `Battle at ${who}`}<small>${text}</small>${strip}${objectiveLine}${bribeLine}<small>${lair ? 'Your army' : 'Defenders'} ${d} · ${lair ? 'The lair' : 'Attackers'} ${a} · ${elapsed} · click to look at the ${lair ? 'fight' : 'attackers'}${role === 'defend' && !lair ? ' · right-click the raiders with an army selected to send it' : ''}</small>`,
       () => lookAtAttackers(v), greed === undefined ? undefined : { greed, offer, pay: doBribe });
-    if (role !== 'watch' && !lair) acts.push({ icon: 'army', label: cmdScreen?.active ? 'Village view' : 'Command screen', title: 'Swap the interface for an army view: both sides, health, morale and orders (K)', run: () => { commandScreen().toggle(); battleBanner(); } });
-    if (cmdScreen?.active) cmdScreen.update(w.battle_roster(), role === 'attack' ? 1 : 0, { mine: role === 'attack' ? 'Your army' : lair ? 'Your army' : 'Defenders', theirs: esc(lair ? 'The lair' : attacker) });
+    if (battleViewAvailable && !cmdScreen?.active) acts.unshift({ icon: 'army', label: 'Battle view', title: 'Open the army roster and battle orders', run: toggleBattleView });
+    if (cmdScreen?.active) cmdScreen.update(w.battle_roster(), role === 'attack' ? 1 : 0, { mine: role === 'attack' || lair ? 'Your army' : 'Defenders', theirs: esc(lair ? 'The lair' : role === 'attack' ? who : attacker) });
     const order = canOrder ? (group: number, mode: number) => chooseBattleOrder(v, mine ? null : key, group, mode) : undefined;
     ui.battleControls(acts, order, order ? w.battle_orders(mine ? 0 : myTag()) : undefined);
     return;
@@ -4002,7 +4015,7 @@ function bindInput() {
     const d0 = down, moved = Math.hypot(e.clientX - down.x, e.clientY - down.y); down = null;
     const tap = moved <= (touch ? TOUCH_DRAG_PIXELS : 5);
     if (touch && movingTouchPreview && !tap) { penStart = null; penPreview.clear(); showTouchTools(); return; }
-    if (touch && tap && (pendingBattleOrder || (selectedKind === null && performance.now() - d0.at >= 500))) { dropStroke(); contextAction(e); return; }
+    if (tap && (pendingBattleOrder || (touch && selectedKind === null && performance.now() - d0.at >= 500))) { dropStroke(); contextAction(e); return; }
     if (penStart && selectedKind !== null) {
       const a = penStart; penStart = null; penPreview.clear();
       if (moved > 8) { const h = terrain.pick(pointerRay(e).ray), o = h ? penOutline(a, { x: h.x, z: h.z }, e.altKey) : null; if (o) penCommit(selectedKind, o); ghostCode = 99; previewKey = ''; ui.hint(placeHint(selectedKind)); return; }
@@ -4063,7 +4076,14 @@ function bindInput() {
       const place = hit ? placeUnder(pointerRay(e)) : null;
       if (place && !place.done) void sendToPlace(multiDets.slice(), place);   // right-click on a wild place: the armies march there and go in
       else if (hit && reinforcementPoint(hit.x, hit.z)) void orderArmies(multiDets.slice(), orderDefend);   // right-click on the raiders: the army goes to meet them
-      else if (hit) void orderArmies(multiDets.slice(), (id, k) => { const a = k * 2.4, r = k ? 3 + 2 * Math.sqrt(k) : 0; return orderMarch(id, hit.x + Math.cos(a) * r, hit.z + Math.sin(a) * r); });
+      else if (hit) {
+        const ids = multiDets.slice();
+        const leader = e.ctrlKey ? lv.field.position(ids[0]) : null;
+        void orderArmies(ids, (id, index) => {
+          const goal = marchDestination(hit, index, leader, lv.field.position(id));
+          return orderMarch(id, goal.x, goal.z);
+        });
+      }
       return;
     }
     openContext(e);
@@ -4081,7 +4101,7 @@ function bindInput() {
     switch (keys.actionOf(e)) {
       case 'penFinish': if (finishStroke()) e.preventDefault(); break;
       case 'penUndo': if (undoStroke()) e.preventDefault(); break;
-      case 'cancel': if (rig.following) rig.stopFollowing(); else if (pendingBattleOrder) setPendingBattleOrder(null); else if (roadPts.length) roadReset(); else if (penPath.length) penReset(); else if (selectedKind !== null) selectKind(null); else if (selectedDet !== null) selectDet(null); else selectBuilding(null); break;
+      case 'cancel': if (pendingBattleOrder) setPendingBattleOrder(null); else if (cmdScreen?.active) toggleBattleView(); else if (rig.following) rig.stopFollowing(); else if (roadPts.length) roadReset(); else if (penPath.length) penReset(); else if (selectedKind !== null) selectKind(null); else if (selectedDet !== null) selectDet(null); else selectBuilding(null); break;
       case 'rotateBuilding': rotateTool(); break;
       case 'focusBuild': if (ui.focusBuildSearch()) e.preventDefault(); break;
       case 'deposits': toggleResources(); break;
@@ -4093,7 +4113,7 @@ function bindInput() {
       case 'nextArmy': { e.preventDefault(); const ids = lv.field.ids(); if (ids.length) { const i = ids.indexOf(selectedDet ?? -1); const id = ids[(i + 1) % ids.length], p = lv.field.position(id); selectDet(id); if (p) rig.focus(p.x, p.z); } break; }
       case 'haltArmy': multiDets.slice().forEach(id => detAction('halt', id)); break;
       case 'recallArmy': void orderArmies(multiDets.slice(), orderRecall); break;
-      case 'commandScreen': if (lv.world.battle_active()) { commandScreen().toggle(); battleBanner(); } break;
+      case 'commandScreen': if (!e.repeat) toggleBattleView(); break;
       case 'fullMap': ui.toggleMap(); break;
       case 'fullscreen': e.preventDefault(); toggleFullscreen(); break;
       case 'photo': e.preventDefault(); togglePhotoMode(renderer.domElement, () => perf.render(renderer, drawScene), t => ui.toast(t, 'info')); break;

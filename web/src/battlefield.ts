@@ -54,3 +54,13 @@ export function crossingSummary(planks: number, wood: number, availablePlanks: n
     shortage: needed.length ? `Short ${needed.join(' and ')}` : '',
   };
 }
+
+type MarchPoint = { x: number; z: number };
+
+/** The lead army takes the click. A formation march translates the other destinations by their current offsets. */
+export function marchDestination(target: MarchPoint, index: number, leader?: MarchPoint | null, army?: MarchPoint | null): MarchPoint {
+  if (leader && army) return { x: target.x + (army.x - leader.x), z: target.z + (army.z - leader.z) };
+  const angle = index * 2.4;
+  const radius = index ? 3 + 2 * Math.sqrt(index) : 0;
+  return { x: target.x + Math.cos(angle) * radius, z: target.z + Math.sin(angle) * radius };
+}

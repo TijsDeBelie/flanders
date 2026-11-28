@@ -53,7 +53,7 @@ body { background: #1a140e; color: var(--paper); font-family: var(--f-ui); font-
    .primary (the one main action of a view), .danger, .on / aria-pressed (a switch that is on), .small. `.pbtn` and `.tool-action` are the older names of the same thing and take the same rules. */
 :root { --b-bg: #2f251bdd; --b-fg: var(--paper); --b-edge: #6b5536; --b-hover-bg: #3d3022; --b-hover-edge: var(--gold-soft); --b-font: var(--f-ui); --b-size: 14px; --b-pad: 6px 11px; }
 .sheet, #ledger, #choicebox { --b-bg: var(--paper-2); --b-fg: var(--ink); --b-edge: var(--ink); --b-hover-bg: #f6edd6; --b-hover-edge: var(--ink); --b-font: var(--f-old); --b-size: 16px; --b-pad: 7px 14px; }
-#tool-dock { --b-bg: #2a2014; --b-edge: #6d5a38; --b-hover-bg: #392b1a; --b-hover-edge: #c9a24a; --b-font: inherit; --b-size: inherit; --b-pad: 4px 8px; }
+#tool-dock, #cmd-screen { --b-bg: #2a2014; --b-edge: #6d5a38; --b-hover-bg: #392b1a; --b-hover-edge: #c9a24a; --b-font: inherit; --b-size: inherit; --b-pad: 4px 8px; }
 .btn, .pbtn, .tool-action { font-family: var(--b-font); font-size: var(--b-size); font-weight: 500; line-height: 1.25; padding: var(--b-pad); border: 1px solid var(--b-edge); border-radius: 3px; background: var(--b-bg); color: var(--b-fg); cursor: pointer; }
 .pbtn { flex: none; } .tool-action { min-height: 30px; border-radius: 5px; }
 .btnrow .pbtn, .btnrow .btn { flex: 1; }
@@ -517,12 +517,15 @@ table.flowbld .pbtn { padding: 2px 8px; font-size: 12px; }
 .unitbar.foe b { background: #d4422a; }
 
 /* ---------- command screen (army view) ---------- */
-#cmd-screen { position: fixed; inset: 0; z-index: 6; pointer-events: none; font: 13px system-ui, sans-serif; color: #f1e4c3; }
+#cmd-screen { position: fixed; inset: 0; z-index: 16; padding: max(6px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 6px; pointer-events: none; font: 13px system-ui, sans-serif; color: #f1e4c3; }
 #cmd-screen[hidden] { display: none; }
-#cmd-screen h3 { margin: 0 0 6px; font-family: var(--f-display); letter-spacing: .08em; font-size: 14px; color: #e9c46a; }
-#cs-top { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 16px; padding: 8px 18px; background: #1d150de6; border: 1px solid #c9a24a; border-radius: 8px; pointer-events: auto; }
-#cs-left, #cs-right { position: absolute; top: 70px; width: 270px; max-height: calc(100vh - 220px); overflow: auto; padding: 10px 12px; background: #1d150de6; border: 1px solid #6b5536; border-radius: 8px; pointer-events: auto; }
-#cs-left { left: 12px; } #cs-right { right: 12px; border-color: #d9604e; }
+#cmd-screen header { display: flex; justify-content: center; gap: 8px; align-items: center; min-width: 0; }
+#cs-leave { pointer-events: auto; flex: none; min-height: 44px; }
+#cmd-screen h3 { margin: 0 0 6px; font-family: var(--f-display); font-size: 14px; color: #e9c46a; }
+#cs-top { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: auto; padding: 6px 10px; background: #1d150de6; border: 1px solid #c9a24a; border-radius: 8px; pointer-events: auto; }
+.cs-rosters { display: flex; justify-content: space-between; align-items: start; gap: 8px; min-height: 0; }
+#cs-left, #cs-right { width: min(270px, 47%); min-width: 0; max-height: min(100%, 32dvh); overflow: auto; padding: 6px 8px; background: #1d150de6; border: 1px solid #6b5536; border-radius: 8px; pointer-events: auto; }
+#cs-right { border-color: #d9604e; }
 .cs-side { display: grid; grid-template-columns: auto auto; gap: 2px 10px; align-items: center; min-width: 150px; }
 .cs-side b { grid-column: 1 / -1; } .cs-side small { grid-column: 1 / -1; color: #ffb4a6; }
 .cs-side.theirs b { color: #ffb4a6; }
@@ -533,19 +536,14 @@ table.flowbld .pbtn { padding: 2px 8px; font-size: 12px; }
 .cs-bar { flex: 1; height: 6px; background: #000a; border-radius: 3px; overflow: hidden; display: inline-block; min-width: 50px; }
 .cs-bar i { display: block; height: 100%; background: #6bbf59; } .cs-bar.warn i { background: #e0b84a; } .cs-bar.bad i { background: #d9604e; }
 .cs-empty { color: #b9a98a; margin: 0; }
-/* the army view replaces the village interface: the side panel, goals and top bar make way; the minimap and the battle controls stay */
-body.cmd-mode #ledger, body.cmd-mode #ledger-open, body.cmd-mode #topbar, body.cmd-mode #goals { display: none !important; }
-body.cmd-mode #tool-dock { left: 50%; bottom: 12px !important; width: calc(100vw - 24px); }
-body.cmd-mode #battle-controls { max-width: 100%; }
-body.cmd-mode #battle-orders { min-width: 0; justify-content: center; }
-@media (max-width: 900px) { #cs-left, #cs-right { width: 190px; } #cs-right { top: auto; bottom: 90px; } }
-/* keep the strength line and the panels clear of the battle banner, and let the order buttons wrap on a narrow window */
-body.cmd-mode #battle { display: none !important; }
-body.cmd-mode #cs-top { top: 10px; bottom: auto; }
-body.cmd-mode #cs-left, body.cmd-mode #cs-right { top: 76px; max-height: calc(100vh - 76px - 190px); }
-@media (max-width: 900px) { body.cmd-mode #cs-right { top: auto; bottom: 190px; } }
-body.cmd-mode #battle-controls { flex-wrap: wrap; justify-content: center; }
+body.cmd-mode :is(#ledger, #ledger-open, #topbar, #goals, #tool-dock, #minimap-card, #follow-stop, #tutorial) { display: none !important; }
+#cmd-screen #battle-controls { justify-self: center; min-width: 0; width: fit-content; max-width: 100%; max-height: 36dvh; overflow: auto; }
+#cmd-screen #battle-controls > * { flex-shrink: 0; }
+#cmd-screen #battle-close { display: none; }
+#cmd-screen #battle-orders { min-width: 0; }
 #battle-orders { flex-wrap: wrap; }
+#tool-dock #battle-controls.compact-battle:has([data-label="Battle view"]) > :not(#battle-acts),
+#tool-dock #battle-controls.compact-battle:has([data-label="Battle view"]) #battle-acts > :not([data-label="Battle view"]) { display: none; }
 /* the card of the selected armies */
 #cs-sel { position: fixed; z-index: 6; left: 14px; bottom: 14px; width: 220px; padding: 10px 12px; background: #1d150de6; border: 1px solid #c9a24a; border-radius: 8px; color: #f1e4c3; font: 13px system-ui, sans-serif; box-shadow: 0 8px 24px #0007; }
 #cs-sel[hidden] { display: none; }
@@ -640,8 +638,8 @@ body.cmd-mode #cs-sel { display: none; }
 .dd-list li[aria-selected="true"] { font-weight: 700; }
 .dd-list li[aria-disabled="true"] { opacity: .45; cursor: default; }
 /* in the battle dock the button is dark like the other tools there */
-#tool-dock .dd-btn { background: #2a2014; border-color: #6d5a38; color: var(--paper); font-size: inherit; padding: 4px 8px; min-height: 30px; border-radius: 5px; }
-@media (hover: hover) { #tool-dock .dd-btn:hover:not(:disabled) { border-color: #c9a24a; background: #392b1a; } }
+:is(#tool-dock, #cmd-screen) .dd-btn { background: #2a2014; border-color: #6d5a38; color: var(--paper); font-size: inherit; padding: 4px 8px; min-height: 30px; border-radius: 5px; }
+@media (hover: hover) { :is(#tool-dock, #cmd-screen) .dd-btn:hover:not(:disabled) { border-color: #c9a24a; background: #392b1a; } }
 /* the battle headline in the bar: compact (the red notice used to be larger than the controls under it) */
 #battle-controls #battle { padding: 4px 28px 4px 10px; font-size: 13px; letter-spacing: .04em; line-height: 1.25; max-width: min(480px, 92vw); animation: none; box-shadow: none; }
 #battle-controls #battle small { font-size: 11.5px; line-height: 1.3; margin-top: 1px; }
