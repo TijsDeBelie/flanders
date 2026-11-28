@@ -57,11 +57,12 @@ export class CommandScreen {
   private el: HTMLElement;
   private on = false;
   private icon: (kind: number) => string;
-  constructor(icon: (kind: number) => string) {
+  constructor(icon: (kind: number) => string, leave: () => void) {
     this.icon = icon;
     this.el = document.createElement('div');
     this.el.id = 'cmd-screen'; this.el.hidden = true;
-    this.el.innerHTML = '<div id="cs-top"></div><div id="cs-left"><h3>Your troops</h3><div id="cs-mine"></div></div><div id="cs-right"><h3>The enemy</h3><div id="cs-theirs"></div></div>';
+    this.el.innerHTML = '<header><div id="cs-top"></div><button id="cs-leave" class="tool-action" type="button">Village view</button></header><div class="cs-rosters"><div id="cs-left"><h3>Your troops</h3><div id="cs-mine"></div></div><div id="cs-right"><h3>The enemy</h3><div id="cs-theirs"></div></div></div>';
+    this.el.querySelector<HTMLButtonElement>('#cs-leave')!.onclick = leave;
     document.body.appendChild(this.el);
   }
   private card: HTMLElement | null = null;
@@ -79,8 +80,15 @@ export class CommandScreen {
   }
   private cardAct: ((action: string) => void) | null = null;
   get active() { return this.on; }
-  set(on: boolean) { this.on = on; this.el.hidden = !on; document.body.classList.toggle('cmd-mode', on); }
-  toggle() { this.set(!this.on); return this.on; }
+  set(on: boolean) {
+    if (on === this.on) return;
+    const controls = document.getElementById('battle-controls')!;
+    (on ? this.el : document.getElementById('tool-dock')!).appendChild(controls);
+    this.on = on;
+    this.el.hidden = !on;
+    document.body.classList.toggle('cmd-mode', on);
+    if (on) this.el.querySelector<HTMLButtonElement>('#cs-leave')!.focus();
+  }
   /** Redraw from a roster (`battle_roster`). `mySide` is 0 when we defend and 1 when we attack. */
   update(flat: ArrayLike<number>, mySide: number, labels: { mine: string; theirs: string }) {
     if (!this.on) return;

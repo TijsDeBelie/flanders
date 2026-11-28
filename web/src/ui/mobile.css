@@ -182,10 +182,6 @@ body.phone .flagctl { min-width: 0; width: 100%; }
 body.phone .swatches button { width: 30px; height: 30px; }
 body.phone .stats.five .stat b { font-size: 17px; }
 
-/* ---- the command screen (army view) ---- */
-body.phone #cmd-screen #cs-left, body.phone #cmd-screen #cs-right { width: min(190px, 44vw); max-height: 38dvh; top: auto; bottom: calc(var(--peek-top) + 56px); font-size: 12px; }
-body.phone #cmd-screen #cs-top { top: calc(var(--top-h, 62px) + 4px); gap: 8px; padding: 6px 10px; max-width: calc(100vw - 16px); overflow-x: auto; }
-
 /* the guide card: smaller on a phone, so it leaves room for the village */
 body.phone #tutorial { font-size: 13px; padding: 10px 12px; }
 body.phone #tutorial h4 { font-size: 15px; }
