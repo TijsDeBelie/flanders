@@ -1790,6 +1790,25 @@ impl World {
         self.after_change();
         (self.buildings.len() - 1) as i32
     }
+    /// An army has bridged the water from (ax, ay) to (bx, by): the village gets a real bridge there, the same building the player builds (drawn, walked and
+    /// routed over by villagers, armies and raiders alike, joined by roads, and selectable, upgradable and demolishable), reaching onto both banks, of the tier its span needs.
+    /// It is marked as an army's (`mode` 1) so the field-bridge limit counts it. (Older villages kept such crossings as bare segments in `bridges`: those still work as before.)
+    pub(crate) fn army_bridge(&mut self, ax: f32, ay: f32, bx: f32, by: f32) {
+        let (dx, dy) = (bx - ax, by - ay); let span = dx.hypot(dy).max(1.0);
+        let deg = ((dy.atan2(dx).to_degrees().round() as i32) % 360 + 360) % 360;
+        let a = (deg as f32).to_radians(); let (ux, uy) = (a.cos(), a.sin());
+        let l = ((span + 2.0 * BRIDGE_MARGIN) * 10.0).round() / 10.0;
+        let (cx, cy) = ((ax + bx) / 2.0, (ay + by) / 2.0);
+        let tier = BRIDGE_SPAN.iter().position(|&s| span <= s).unwrap_or(BRIDGE_SPAN.len() - 1) as u8;
+        let aux = deg + 360 * ((l * 10.0).round() as i32);
+        let rot = (((ux.atan2(uy) / std::f32::consts::FRAC_PI_4).round() as i32 % 8) + 8) % 8;
+        let (ha, hb) = (self.height_at(cx - ux * l / 2.0, cy - uy * l / 2.0), self.height_at(cx + ux * l / 2.0, cy + uy * l / 2.0));
+        self.buildings.push(Building { kind: BRIDGE, tier, x: cx, y: cy, rot: rot as u8, pad_h: (ha + hb) / 2.0, progress: 0, status: 4, aux, staff: 0, residents: 0, hp: battle::max_hp(BRIDGE, tier), burning: 0.0, garrison: 0, born: self.tick as u32, opts: 0, fert: FERT_MAX, mode: 1, target: -1, beff: 100 });
+        self.after_change();
+    }
+    /// Bridges armies have built (the old bare crossings and the bridge buildings they now leave): the field-bridge limit counts these.
+    pub(crate) fn field_bridge_count(&self) -> usize { self.bridges.len() + self.buildings.iter().filter(|b| b.kind == BRIDGE && b.mode == 1).count() }
+
     /// What a bridge would be if placed at (dx, dy): [code, centre x, centre y, angle, length, span, planks, wood, node x, node z, node x, node z]. The code is `can_place`'s; the nodes are where its roads would join.
     pub fn bridge_preview(&self, dx: i32, dy: i32) -> Vec<f32> {
         let (code, snap) = self.bridge_check(dx, dy, 0);
@@ -3989,7 +4008,7 @@ mod tests {
             let d = w.det_flat();
             assert_eq!(d[8] as u8, march::S_IDLE, "crossed: {:?}", &d[..16]);
             assert!((d[1] - (x0 + len + 5.0)).abs() < 1.0);
-            assert_eq!(!w.bridges_flat().is_empty(), expect_bridge, "bridge for short crossings, ferry for long ones");
+            assert_eq!(w.field_bridge_count() > 0, expect_bridge, "bridge for short crossings, ferry for long ones");
             assert!(w.stock[if expect_bridge { PL } else { W } as usize] < 200, "materials were spent");
             let _ = id;
         }

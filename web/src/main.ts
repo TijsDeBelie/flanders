@@ -1379,7 +1379,8 @@ function drawMarchPreview(request: MarchPreviewRequest, plan: Float32Array) {
 function updateDets() {
   const f = lv.world.det_flat(), list: { id: number; units: number[]; text: string; selected: boolean; leftWp: number }[] = [];
   for (let o = 0; o < f.length; o += 17) {
-    const st = f[o + 8], state = STATE_TEXT[st] + (st === 3 || st === 2 ? ` (${Math.round(f[o + 11] * 100)}%)` : '');
+    const st = f[o + 8], regroup = st === 1 && f[o + 10] === 0;   // the soldiers are there, their riders and engines (who march apart) still on the way
+    const state = regroup ? 'Waiting for its riders and engines' : STATE_TEXT[st] + (st === 3 || st === 2 ? ` (${Math.round(f[o + 11] * 100)}%)` : '');
     list.push({ id: f[o], units: [f[o + 3], f[o + 4], f[o + 5], f[o + 6], f[o + 7], f[o + 16]], text: state, selected: multiDets.includes(f[o]), leftWp: f[o + 10] });
   }
   ui.setDets(list);

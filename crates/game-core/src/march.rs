@@ -17,6 +17,10 @@ const ORG: f32 = -1200.0;
 const MAX_FERRY: f32 = 64.0;
 const BRIDGE_MAX: f32 = 16.0;
 const FIELD_BRIDGE_LIMIT: usize = 60;
+/// How much longer than the shortest way a siege engine's wider road may be (see `route_with_water`).
+const SIEGE_DETOUR: f32 = 1.35;
+/// How much longer the way over existing bridges may be than one that bridges or ferries water, before the army bridges (see `find_path_uncached`).
+const DRY_DETOUR: f32 = 1.5;
 
 fn crossing_cost(len: f32, bridges: usize, soldiers: u32) -> (bool, usize, i32) {
     if len <= BRIDGE_MAX && bridges < FIELD_BRIDGE_LIMIT { (true, PL as usize, (len * 1.5).ceil() as i32) }
@@ -40,7 +44,7 @@ pub(crate) const ROUTE_PENDING: i32 = -11;
 enum Leg { Clear, WaitingForDeck, Blocked }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum WaterTravel { Dry, ExistingDecks, Build, BridgeShortcut }
+pub(crate) enum WaterTravel { Dry, ExistingDecks, Build, BridgeShortcut }
 
 const HOME_MARCH_SPEED: f32 = 1.35;
 const ARMY_ROAD_SPEED: f32 = pathnet::ROAD_SPEED + 0.4;
@@ -657,8 +661,27 @@ impl World {
                 if route.windows(2).all(|p| p[1].mode != 2 || (p[1].x - p[0].x).hypot(p[1].y - p[0].y) <= BRIDGE_MAX) { return Ok(route); }
             }
         }
-        self.route_with_water(units, sx, sy, tx, ty, WaterTravel::ExistingDecks)
-            .or_else(|_| self.route_with_water(units, sx, sy, tx, ty, WaterTravel::Build))
+        // The way over existing bridges and decks only, unless bridging or ferrying is much shorter and the village can pay for it. (The dry way used to win whenever
+        // there was one: on a map of rivers and lakes that sent armies seven to fifteen times the distance round, and they seemed lost or stuck.)
+        let dry = self.route_with_water(units, sx, sy, tx, ty, WaterTravel::ExistingDecks);
+        let wet = self.route_with_water(units, sx, sy, tx, ty, WaterTravel::Build);
+        match (dry, wet) {
+            (Ok(d), Ok(b)) => {
+                let (dl, bl) = (Self::route_length(sx, sy, &d), Self::route_length(sx, sy, &b));
+                if dl <= bl * DRY_DETOUR + 150.0 || !self.can_pay_crossings(units, sx, sy, &b) { Ok(d) } else { Ok(b) }
+            }
+            (Ok(d), Err(_)) => Ok(d),
+            (Err(_), b) => b,
+        }
+    }
+    /// Can the village pay for the bridges and ferries along this route (each priced as `crossing_cost` prices it)?
+    fn can_pay_crossings(&self, units: &[u32; NK], sx: f32, sy: f32, p: &[Wp]) -> bool {
+        let total: u32 = units.iter().sum(); let mut need = [0i32; N_RES]; let mut prev = (sx, sy); let mut bridges = self.field_bridge_count();
+        for w in p {
+            if w.mode == 2 { let len = (w.x - prev.0).hypot(w.y - prev.1); let (bridge, res, cost) = crossing_cost(len, bridges, total); if bridge { bridges += 1; } need[res] += cost; }
+            prev = (w.x, w.y);
+        }
+        (0..N_RES).all(|r| self.stock[r] >= need[r])
     }
 
     /// The same for somebody on foot who will not wade (villagers): [1, x, y, x, y, ...] or empty when there is no dry way.
@@ -687,20 +710,31 @@ impl World {
         self.route_with_water(units, sx, sy, tx, ty, if no_water { WaterTravel::Dry } else { WaterTravel::Build })
     }
 
-    fn route_with_water(&self, units: &[u32; NK], sx: f32, sy: f32, tx: f32, ty: f32, water: WaterTravel) -> Result<Vec<Wp>, i32> {
+    pub(crate) fn route_with_water(&self, units: &[u32; NK], sx: f32, sy: f32, tx: f32, ty: f32, water: WaterTravel) -> Result<Vec<Wp>, i32> {
         if !Self::infrastructure_in_bounds(sx, sy) || !Self::infrastructure_in_bounds(tx, ty) { return Err(-2); }
         let margins = if water == WaterTravel::Dry { [30.0, 90.0, 500.0] } else { [45.0, 180.0, 2500.0] };
         let mut last = Err(-2);
-        // a siege engine looks for a road wide enough for it first, and only if there is none makes do with a narrower one
-        let levels: &[u8] = if units[4] + units[5] > 0 { &[3, 2, 1] } else { &[0] };
-        'search: for &lvl in levels {
+        if units[4] + units[5] == 0 {
+            for m in margins { last = self.route_in_window(units, sx, sy, tx, ty, m, water, 0); if !matches!(last, Err(-2)) { break; } }
+            return last;
+        }
+        // A siege engine wants a road wide enough for it (level 3, then 2), but not at any price: the widest road whose way is at most `SIEGE_DETOUR` times the
+        // shortest the engines can take is used. (Taking the widest road there was, however far round, sent whole armies on detours several times the distance:
+        // the soldiers walk the engines' route, and then stood at the goal for minutes waiting for them.)
+        let mut found: Vec<(Vec<Wp>, f32)> = vec![];
+        'levels: for &lvl in &[3u8, 2, 1] {
             for m in margins {
-                last = self.route_in_window(units, sx, sy, tx, ty, m, water, lvl);
-                if !matches!(last, Err(-2)) { break 'search; }
+                match self.route_in_window(units, sx, sy, tx, ty, m, water, lvl) {
+                    Ok(p) => { let len = Self::route_length(sx, sy, &p); found.push((p, len)); break; }
+                    Err(-2) => { last = Err(-2); }
+                    Err(e) => { last = Err(e); if found.is_empty() { return last; } break 'levels; }   // (as before: a hard refusal ends the search)
+                }
             }
         }
-        last
+        let Some(shortest) = found.iter().map(|f| f.1).reduce(f32::min) else { return last };
+        Ok(found.into_iter().find(|f| f.1 <= shortest * SIEGE_DETOUR + 60.0).map(|f| f.0).expect("the shortest is within its own bound"))
     }
+    pub(crate) fn route_length(sx: f32, sy: f32, p: &[Wp]) -> f32 { let mut prev = (sx, sy); p.iter().map(|w| { let l = (w.x - prev.0).hypot(w.y - prev.1); prev = (w.x, w.y); l }).sum() }
 
     fn route_in_window(&self, units: &[u32; NK], sx: f32, sy: f32, tx: f32, ty: f32, margin: f32, water: WaterTravel, siege: u8) -> Result<Vec<Wp>, i32> {
         let ns = nav_static(self.seed); let ov = self.ov(); let net = self.net(); let obst = self.obst();
@@ -1313,7 +1347,7 @@ impl World {
                             d.sx = d.x; d.sy = d.y;
                             let len = ((wp.x - d.x).powi(2) + (wp.y - d.y).powi(2)).sqrt();
                             let total: u32 = d.units.iter().sum();
-                            let (bridge, res, cost) = crossing_cost(len, self.bridges.len(), total);
+                            let (bridge, res, cost) = crossing_cost(len, self.field_bridge_count(), total);
                             if self.stock[res] < cost { if d.state != S_WAIT { d.state = S_WAIT; self.push_event(EV_NEEDMAT, res as i32, cost); } }
                             else {
                                 self.stock[res] -= cost; d.phase = 1;
@@ -1325,7 +1359,7 @@ impl World {
                             d.work += 1.0;
                             if d.state == S_FERRY { let t = (d.work / d.work_total).min(1.0); d.x = d.sx + (wp.x - d.sx) * t; d.y = d.sy + (wp.y - d.sy) * t; d.heading = (wp.y - d.sy).atan2(wp.x - d.sx); d.file.record(d.x, d.y, 2); }
                             if d.work >= d.work_total {
-                                if d.state == S_BRIDGE { self.bridges.push([d.sx, d.sy, wp.x, wp.y]); self.map_ver += 1; d.phase = 2; }
+                                if d.state == S_BRIDGE { self.army_bridge(d.sx, d.sy, wp.x, wp.y); self.map_ver += 1; d.phase = 2; }   // a real bridge of the village, like one the player builds (see `army_bridge`)
                                 else {
                                     d.x = wp.x; d.y = wp.y; d.phase = 0;
                                     d.path[d.wi].mode = 3; // remember that tied files have a ferry available at this completed leg
@@ -1466,7 +1500,7 @@ impl World {
             Ok(p) => {
                 let base = self.march_speed(&head); let workers = (head[0] + head[2]) as f32; let total: u32 = units.iter().sum();
                 let (mut t, mut planks, mut wood, mut prev) = (0.0f32, 0i32, 0i32, (sx, sy));
-                let mut bridges = self.bridges.len();
+                let mut bridges = self.field_bridge_count();
                 let ns = nav_static(self.seed);
                 for w in &p {
                     let len = ((w.x - prev.0).powi(2) + (w.y - prev.1).powi(2)).sqrt();

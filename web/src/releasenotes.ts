@@ -18,8 +18,12 @@ export const RELEASES: Release[] = [
       'The opening: the village starts with 360 grain (was 120), and the first goals ask for a farm first, then two houses, then a second farm. One house and one farm no longer run out of food.',
       'The first bandit raid is a small one.',
       'The computer villages rule too: they set taxes by their mood, muster when raiders come, take up a focus that suits them and grant charters.',
+      'A bridge your army builds over water is now a real bridge of your village: it looks like the bridges you build, villagers and caravans use it, roads join it, raiders cross it, and you can select, upgrade or demolish it.',
     ],
-    fixed: [],
+    fixed: [
+      'Armies no longer march far round lakes and rivers when a short bridge or ferry would do: an army now bridges the water unless the dry way is at most half again as long, or the village cannot pay for the crossing. On three test maps, armies with knights and siege engines now reach their goal without a long wait in 37 of 42 marches (25 before).',
+      'Armies with catapults and rams no longer take the widest road at any price: the engines keep to a road at most a third longer than the shortest way they can take, so the soldiers wait less for them at the goal. While they wait, the army list says "Waiting for its riders and engines".',
+    ],
   },
   {
     version: '0.7.2', date: '2026-11-27', title: 'Mines in the hillside and a living wild',
